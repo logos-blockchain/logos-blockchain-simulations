@@ -13,3 +13,4 @@ simlib/**/Cargo.lock
 simlib/test.json
 *.ignore*
 *.png
+*/.DS_Store
