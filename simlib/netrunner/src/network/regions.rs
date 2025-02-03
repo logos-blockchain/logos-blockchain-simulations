@@ -10,9 +10,13 @@ use super::{NetworkBehaviourKey, NetworkSettings};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub enum Region {
-    NorthAmerica,
+    NorthAmericaWest,
+    NorthAmericaCentral,
+    NorthAmericaEast,
     Europe,
-    Asia,
+    NorthernEurope,
+    EastAsia,
+    SoutheastAsia,
     Africa,
     SouthAmerica,
     Australia,
@@ -21,9 +25,13 @@ pub enum Region {
 impl core::fmt::Display for Region {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let s = match self {
-            Self::NorthAmerica => "NorthAmerica",
+            Self::NorthAmericaWest => "NorthAmericaWest",
+            Self::NorthAmericaCentral => "NorthAmericaCentral",
+            Self::NorthAmericaEast => "NorthAmericaEast",
             Self::Europe => "Europe",
-            Self::Asia => "Asia",
+            Self::NorthernEurope => "NorthernEurope",
+            Self::EastAsia => "EastAsia",
+            Self::SoutheastAsia => "SoutheastAsia",
             Self::Africa => "Africa",
             Self::SouthAmerica => "SouthAmerica",
             Self::Australia => "Australia",
@@ -42,9 +50,13 @@ impl FromStr for Region {
             .replace(['-', '_', ' '], "")
             .as_str()
         {
-            "northamerica" | "na" => Ok(Self::NorthAmerica),
+            "northamericawest" | "naw" => Ok(Self::NorthAmericaWest),
+            "northamericacentral" | "nac" => Ok(Self::NorthAmericaCentral),
+            "northamericaeast" | "nae" => Ok(Self::NorthAmericaEast),
             "europe" | "eu" => Ok(Self::Europe),
-            "asia" | "as" => Ok(Self::Asia),
+            "northerneurope" | "neu" => Ok(Self::NorthernEurope),
+            "eastasia" | "eas" => Ok(Self::EastAsia),
+            "southeastasia" | "seas" => Ok(Self::SoutheastAsia),
             "africa" | "af" => Ok(Self::Africa),
             "southamerica" | "sa" => Ok(Self::SouthAmerica),
             "australia" | "au" => Ok(Self::Australia),
@@ -56,9 +68,13 @@ impl FromStr for Region {
 impl Serialize for Region {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let s = match self {
-            Self::NorthAmerica => "North America",
+            Self::NorthAmericaWest => "North America West",
+            Self::NorthAmericaCentral => "North America Central",
+            Self::NorthAmericaEast => "North America East",
             Self::Europe => "Europe",
-            Self::Asia => "Asia",
+            Self::NorthernEurope => "Northern Europe",
+            Self::EastAsia => "EastAsia",
+            Self::SoutheastAsia => "Southeast Asia",
             Self::Africa => "Africa",
             Self::SouthAmerica => "South America",
             Self::Australia => "Australia",
@@ -156,7 +172,6 @@ pub fn create_regions<R: Rng>(
 mod tests {
     use std::collections::HashMap;
 
-    use consensus_engine::NodeId;
     use rand::rngs::mock::StepRng;
 
     use crate::{
@@ -164,7 +179,7 @@ mod tests {
             regions::{create_regions, Region},
             NetworkSettings,
         },
-        node::NodeIdExt,
+        node::{NodeId, NodeIdExt},
     };
 
     #[test]
@@ -208,9 +223,13 @@ mod tests {
                 .collect::<Vec<NodeId>>();
 
             let available_regions = [
-                Region::NorthAmerica,
+                Region::NorthAmericaWest,
+                Region::NorthAmericaCentral,
+                Region::NorthAmericaEast,
                 Region::Europe,
-                Region::Asia,
+                Region::NorthernEurope,
+                Region::EastAsia,
+                Region::SoutheastAsia,
                 Region::Africa,
                 Region::SouthAmerica,
                 Region::Australia,

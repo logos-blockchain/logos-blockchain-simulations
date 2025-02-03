@@ -103,8 +103,6 @@ where
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use consensus_engine::View;
-
     use crate::{
         network::{
             behaviour::NetworkBehaviour,
@@ -117,16 +115,17 @@ mod tests {
         },
         output_processors::OutData,
         runner::SimulationRunner,
+        streaming::io::tests::region_from_index,
         warding::SimulationState,
     };
 
     use super::*;
     #[derive(Debug, Clone, Serialize)]
-    struct RuntimeRecord {
-        states: HashMap<NodeId, View>,
+    struct RuntimeRecord<T> {
+        states: HashMap<NodeId, T>,
     }
 
-    impl<S, T: Serialize> TryFrom<&SimulationState<S, T>> for RuntimeRecord {
+    impl<S, T: Serialize + Clone> TryFrom<&SimulationState<S, T>> for RuntimeRecord<T> {
         type Error = anyhow::Error;
 
         fn try_from(value: &SimulationState<S, T>) -> Result<Self, Self::Error> {
@@ -135,7 +134,7 @@ mod tests {
                     .nodes
                     .read()
                     .iter()
-                    .map(|node| (node.id(), node.current_view()))
+                    .map(|node| (node.id(), node.state().clone()))
                     .collect(),
             })
         }
@@ -162,43 +161,19 @@ mod tests {
             RegionsData {
                 regions: (0..6)
                     .map(|idx| {
-                        let region = match idx % 6 {
-                            0 => Region::Europe,
-                            1 => Region::NorthAmerica,
-                            2 => Region::SouthAmerica,
-                            3 => Region::Asia,
-                            4 => Region::Africa,
-                            5 => Region::Australia,
-                            _ => unreachable!(),
-                        };
+                        let region = region_from_index(idx);
                         (region, vec![NodeId::from_index(idx)])
                     })
                     .collect(),
                 node_region: (0..6)
                     .map(|idx| {
-                        let region = match idx % 6 {
-                            0 => Region::Europe,
-                            1 => Region::NorthAmerica,
-                            2 => Region::SouthAmerica,
-                            3 => Region::Asia,
-                            4 => Region::Africa,
-                            5 => Region::Australia,
-                            _ => unreachable!(),
-                        };
+                        let region = region_from_index(idx);
                         (NodeId::from_index(idx), region)
                     })
                     .collect(),
                 region_network_behaviour: (0..6)
                     .map(|idx| {
-                        let region = match idx % 6 {
-                            0 => Region::Europe,
-                            1 => Region::NorthAmerica,
-                            2 => Region::SouthAmerica,
-                            3 => Region::Asia,
-                            4 => Region::Africa,
-                            5 => Region::Australia,
-                            _ => unreachable!(),
-                        };
+                        let region = region_from_index(idx);
                         (
                             NetworkBehaviourKey::new(region, region),
                             NetworkBehaviour {

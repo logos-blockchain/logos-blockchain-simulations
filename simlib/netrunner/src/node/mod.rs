@@ -163,8 +163,14 @@ impl Node for usize {
         self.add_assign(1);
     }
 
-    fn analyze(&self, _: &mut WardCondition) -> bool {
-        todo!()
+    fn analyze(&self, ward: &mut WardCondition) -> bool {
+        match ward {
+            WardCondition::Max(ward) => *self >= ward.max_count,
+            WardCondition::Sum(condition) => {
+                *condition.step_result.borrow_mut() += *self;
+                false
+            }
+        }
     }
 }
 

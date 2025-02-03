@@ -524,7 +524,7 @@ mod tests {
 
     impl PayloadSize for () {
         fn size_bytes(&self) -> u32 {
-            todo!()
+            0
         }
     }
 
@@ -618,16 +618,16 @@ mod tests {
         let node_c = NodeId::from_index(2);
 
         let regions = HashMap::from([
-            (Region::Asia, vec![node_a, node_b]),
+            (Region::EastAsia, vec![node_a, node_b]),
             (Region::Europe, vec![node_c]),
         ]);
         let behaviour = HashMap::from([
             (
-                NetworkBehaviourKey::new(Region::Asia, Region::Asia),
+                NetworkBehaviourKey::new(Region::EastAsia, Region::EastAsia),
                 NetworkBehaviour::new(Duration::from_millis(100), 0.0),
             ),
             (
-                NetworkBehaviourKey::new(Region::Asia, Region::Europe),
+                NetworkBehaviourKey::new(Region::EastAsia, Region::Europe),
                 NetworkBehaviour::new(Duration::from_millis(500), 0.0),
             ),
             (

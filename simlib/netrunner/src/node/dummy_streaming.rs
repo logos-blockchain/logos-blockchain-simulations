@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::warding::WardCondition;
+
 use super::{Node, NodeId};
 
 #[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
@@ -40,6 +42,16 @@ impl<S> Node for DummyStreamingNode<S> {
     }
 
     fn step(&mut self, _: Duration) {
-        todo!()
+        self.state.counter += 1;
+    }
+
+    fn analyze(&self, ward: &mut crate::warding::WardCondition) -> bool {
+        match ward {
+            WardCondition::Max(ward) => self.state.counter >= ward.max_count,
+            WardCondition::Sum(condition) => {
+                *condition.step_result.borrow_mut() += self.state.counter;
+                false
+            }
+        }
     }
 }

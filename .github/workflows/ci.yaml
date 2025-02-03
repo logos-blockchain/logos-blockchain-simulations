@@ -20,7 +20,6 @@ jobs:
       - name: Build
         working-directory: simlib
         run: cargo build -v
-      # TODO: uncomment this after fixing tests
-      # - name: Unit tests
-      #   working-directory: simlib
-      #   run: cargo test -v
+      - name: Unit tests
+        working-directory: simlib
+        run: cargo test -v
