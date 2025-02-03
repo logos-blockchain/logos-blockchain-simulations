@@ -85,25 +85,25 @@
   "stream_settings": {
     "path": "test.json"
   },
-  "node_count": 10,
+  "node_count": 100,
   "seed": 0,
   "record_settings": {},
   "wards": [
     {
-      "sum": 10
+      "sum": 100
     }
   ],
   "connected_peers_count": 4,
   "data_message_lottery_interval": "20s",
   "stake_proportion": 1.0,
-  "epoch_duration": "432000s",
-  "slot_duration": "20s",
-  "slots_per_epoch": 21600,
+  "epoch_duration": "200s",
+  "slot_duration": "1s",
+  "slots_per_epoch": 200,
   "number_of_hops": 2,
   "persistent_transmission": {
     "max_emission_frequency": 1.0,
     "drop_message_probability": 0.0
   },
   "number_of_blend_layers": 2,
-  "max_delay_seconds": 10
+  "max_delay_seconds": 5
 }
