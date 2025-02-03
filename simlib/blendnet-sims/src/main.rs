@@ -85,13 +85,26 @@ impl SimulationApp {
             &mut rng,
             &settings.simulation_settings.network_settings,
         );
+        log!(
+            "Regions",
+            regions
+                .iter()
+                .map(|(region, node_ids)| (region, node_ids.len()))
+                .collect::<HashMap<_, _>>()
+        );
+        log!("NumRegions", regions.len());
+
         let behaviours = create_behaviours(&settings.simulation_settings.network_settings);
         let regions_data = RegionsData::new(regions, behaviours);
 
-        let network = Arc::new(Mutex::new(Network::<BlendMessage>::new(regions_data, seed)));
+        let network = Arc::new(Mutex::new(Network::<BlendMessage>::new(
+            regions_data.clone(),
+            seed,
+        )));
 
         let topology = Topology::new(&node_ids, settings.connected_peers_count, &mut rng);
         log_topology(&topology);
+        log_conn_latency_distribution(&topology.conn_latency_distribution(&regions_data));
 
         let nodes: Vec<_> = node_ids
             .iter()
@@ -259,6 +272,25 @@ fn log_topology(topology: &Topology) {
 struct TopologyLog {
     topology: HashMap<usize, Vec<usize>>,
     diameter: usize,
+}
+
+fn log_conn_latency_distribution(distribution: &HashMap<Duration, usize>) {
+    log!(
+        "ConnLatencyDistribution",
+        ConnLatencyDistributionLog {
+            num_links: distribution.values().sum(),
+            distribution: distribution
+                .iter()
+                .map(|(latency, count)| (latency.as_millis(), *count))
+                .collect::<HashMap<_, _>>(),
+        }
+    );
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ConnLatencyDistributionLog {
+    num_links: usize,
+    distribution: HashMap<u128, usize>,
 }
 
 fn main() -> anyhow::Result<()> {

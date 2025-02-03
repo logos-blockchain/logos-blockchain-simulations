@@ -121,6 +121,14 @@ impl RegionsData {
     pub fn network_behaviour(&self, node_a: NodeId, node_b: NodeId) -> &NetworkBehaviour {
         let region_a = self.node_region[&node_a];
         let region_b = self.node_region[&node_b];
+        self.network_behaviour_between_regions(region_a, region_b)
+    }
+
+    pub fn network_behaviour_between_regions(
+        &self,
+        region_a: Region,
+        region_b: Region,
+    ) -> &NetworkBehaviour {
         let k = NetworkBehaviourKey::new(region_a, region_b);
         let k_rev = NetworkBehaviourKey::new(region_b, region_a);
         self.region_network_behaviour
