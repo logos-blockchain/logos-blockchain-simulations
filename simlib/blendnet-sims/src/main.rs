@@ -114,6 +114,7 @@ impl SimulationApp {
                 create_boxed_blendnode(
                     node_id,
                     &mut network,
+                    regions_data.clone(),
                     settings.simulation_settings.clone(),
                     no_netcap,
                     BlendnodeSettings {
@@ -155,6 +156,7 @@ impl SimulationApp {
 fn create_boxed_blendnode(
     node_id: NodeId,
     network: &mut Network<BlendMessage>,
+    regions_data: RegionsData,
     simulation_settings: SimulationSettings,
     no_netcap: bool,
     blendnode_settings: BlendnodeSettings,
@@ -190,6 +192,7 @@ fn create_boxed_blendnode(
         node_id,
         blendnode_settings,
         network_interface,
+        regions_data,
     ))
 }
 
