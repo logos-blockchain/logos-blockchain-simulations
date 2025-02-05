@@ -191,6 +191,7 @@ fn create_boxed_blendnode(
     Box::new(BlendNode::new(
         node_id,
         blendnode_settings,
+        simulation_settings.step_time,
         network_interface,
         regions_data,
     ))
