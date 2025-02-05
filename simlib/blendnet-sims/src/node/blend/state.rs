@@ -15,6 +15,8 @@ pub struct BlendnodeState {
     pub node_id: NodeId,
     pub step_id: usize,
     pub num_messages_fully_unwrapped: usize,
+    pub cur_num_persistent_transmission_scheduled: usize,
+    pub cur_num_temporal_processor_scheduled: usize,
 }
 
 #[derive(Serialize)]
