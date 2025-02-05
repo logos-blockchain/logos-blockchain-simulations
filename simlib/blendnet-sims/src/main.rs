@@ -10,6 +10,7 @@ use crate::node::blend::{BlendMessage, BlendnodeSettings};
 use anyhow::Ok;
 use clap::Parser;
 use crossbeam::channel;
+use multiaddr::Multiaddr;
 use netrunner::network::behaviour::create_behaviours;
 use netrunner::network::regions::{create_regions, RegionsData};
 use netrunner::network::{InMemoryNetworkInterface, Network, PayloadSize};
@@ -139,7 +140,14 @@ impl SimulationApp {
                             slots_per_epoch: settings.slots_per_epoch,
                             network_size: node_ids.len(),
                         },
-                        membership: node_ids.iter().map(|&id| id.into()).collect(),
+                        membership: node_ids
+                            .iter()
+                            .map(|&id| nomos_blend::membership::Node {
+                                id,
+                                address: Multiaddr::empty(),
+                                public_key: id.into(),
+                            })
+                            .collect(),
                     },
                 )
             })
