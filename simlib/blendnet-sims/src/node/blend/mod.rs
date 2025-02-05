@@ -50,10 +50,10 @@ pub struct BlendMessage {
 }
 
 impl BlendMessage {
-    pub fn new(message: Vec<u8>) -> Self {
+    pub fn new(message: Vec<u8>, node_id: NodeId, step_id: usize) -> Self {
         Self {
             message,
-            history: Vec::new(),
+            history: vec![MessageHistoryEvent::Created { node_id, step_id }],
         }
     }
 }
@@ -66,6 +66,11 @@ impl PayloadSize for BlendMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum MessageHistoryEvent {
+    Created {
+        #[serde(with = "node_id_serde")]
+        node_id: NodeId,
+        step_id: usize,
+    },
     PersistentTransmissionScheduled {
         #[serde(with = "node_id_serde")]
         node_id: NodeId,
@@ -464,7 +469,11 @@ impl Node for BlendNode {
                     .crypto_processor
                     .wrap_message(payload.as_bytes())
                     .unwrap();
-                self.schedule_persistent_transmission(BlendMessage::new(message));
+                self.schedule_persistent_transmission(BlendMessage::new(
+                    message,
+                    self.id,
+                    self.state.step_id,
+                ));
             }
         }
 
@@ -542,7 +551,11 @@ impl Node for BlendNode {
                 .crypto_processor
                 .wrap_message(payload.as_bytes())
                 .unwrap();
-            self.schedule_persistent_transmission(BlendMessage::new(message));
+            self.schedule_persistent_transmission(BlendMessage::new(
+                message,
+                self.id,
+                self.state.step_id,
+            ));
         }
 
         // Proceed persistent transmission
