@@ -261,8 +261,8 @@ impl BlendNode {
                 node_id: id,
                 step_id: 0,
                 num_messages_fully_unwrapped: 0,
-                cur_num_persistent_transmission_scheduled: 0,
-                cur_num_temporal_processor_scheduled: 0,
+                cur_num_persistent_scheduled: 0,
+                cur_num_temporal_scheduled: 0,
             },
             data_msg_lottery_update_time_sender,
             data_msg_lottery_interval,
@@ -324,10 +324,10 @@ impl BlendNode {
             .push(MessageEvent::PersistentTransmissionScheduled {
                 node_id: self.id,
                 step_id: self.state.step_id,
-                index: self.state.cur_num_persistent_transmission_scheduled,
+                index: self.state.cur_num_persistent_scheduled,
             });
         self.persistent_sender.send(message).unwrap();
-        self.state.cur_num_persistent_transmission_scheduled += 1;
+        self.state.cur_num_persistent_scheduled += 1;
     }
 
     fn handle_incoming_message(&mut self, message: BlendMessage) {
@@ -356,10 +356,10 @@ impl BlendNode {
             .push(MessageEvent::TemporalProcessorScheduled {
                 node_id: self.id,
                 step_id: self.state.step_id,
-                index: self.state.cur_num_temporal_processor_scheduled,
+                index: self.state.cur_num_temporal_scheduled,
             });
         self.temporal_sender.send(message).unwrap();
-        self.state.cur_num_temporal_processor_scheduled += 1;
+        self.state.cur_num_temporal_scheduled += 1;
     }
 
     fn update_time(&mut self, elapsed: Duration) {
@@ -476,7 +476,7 @@ impl Node for BlendNode {
                             step_id: self.state.step_id,
                             duration: self.duration_between(*step_id, self.state.step_id),
                         });
-                    self.state.cur_num_temporal_processor_scheduled -= 1;
+                    self.state.cur_num_temporal_scheduled -= 1;
                 }
                 event => panic!("Unexpected message history event: {:?}", event),
             }
@@ -527,7 +527,7 @@ impl Node for BlendNode {
                             step_id: self.state.step_id,
                             duration: self.duration_between(*step_id, self.state.step_id),
                         });
-                    self.state.cur_num_persistent_transmission_scheduled -= 1;
+                    self.state.cur_num_persistent_scheduled -= 1;
                 }
                 event => panic!("Unexpected message history event: {:?}", event),
             }
