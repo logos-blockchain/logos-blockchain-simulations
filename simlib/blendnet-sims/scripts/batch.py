@@ -77,10 +77,13 @@ if __name__ == "__main__":
     args = argument_parser.parse_args()
 
     # Read the params CSV file
-    csv_data = []
+    param_sets = []
+    param_set_header = []
     with open(args.params_file, mode="r") as csvfile:
+        param_set_header = csvfile.readline().strip().split(",")
+        csvfile.seek(0)  # Reset file pointer to the beginning after reading the header
         reader = csv.DictReader(csvfile, delimiter=",")
-        csv_data = list(reader)
+        param_sets = list(reader)
 
     # Read the original blendnet json config file
     with open(args.orig_config_file, "r") as jsonfile:
@@ -92,7 +95,7 @@ if __name__ == "__main__":
 
     # Modify and save JSON files for each row in CSV
     config_paths = []
-    for idx, row in enumerate(csv_data):
+    for idx, param_set in enumerate(param_sets):
         output_path = os.path.join(modified_configs_dir, f"{idx}.json")
         config_paths.append(output_path)
 
@@ -111,21 +114,21 @@ if __name__ == "__main__":
         modified_json["network_settings"]["regions"]["southeast asia"] = 0.07
         modified_json["network_settings"]["regions"]["australia"] = 0.03
         modified_json["step_time"] = f"{args.step_duration}ms"
-        modified_json["node_count"] = int(row["network_size"])
+        modified_json["node_count"] = int(param_set["network_size"])
         modified_json["wards"][0]["sum"] = 1000
-        modified_json["connected_peers_count"] = int(row["peering_degree"])
+        modified_json["connected_peers_count"] = int(param_set["peering_degree"])
         modified_json["data_message_lottery_interval"] = "20s"
         modified_json["stake_proportion"] = 0.0
         modified_json["persistent_transmission"]["max_emission_frequency"] = 1.0
         modified_json["persistent_transmission"]["drop_message_probability"] = 0.0
         modified_json["epoch_duration"] = (
-            f"{int(row['cover_slots_per_epoch']) * int(row['cover_slot_duration'])}s"
+            f"{int(param_set['cover_slots_per_epoch']) * int(param_set['cover_slot_duration'])}s"
         )
-        modified_json["slots_per_epoch"] = int(row["cover_slots_per_epoch"])
-        modified_json["slot_duration"] = f"{row['cover_slot_duration']}s"
-        modified_json["max_delay_seconds"] = int(row["max_temporal_delay"])
-        modified_json["number_of_hops"] = int(row["blend_hops"])
-        modified_json["number_of_blend_layers"] = int(row["blend_hops"])
+        modified_json["slots_per_epoch"] = int(param_set["cover_slots_per_epoch"])
+        modified_json["slot_duration"] = f"{param_set['cover_slot_duration']}s"
+        modified_json["max_delay_seconds"] = int(param_set["max_temporal_delay"])
+        modified_json["number_of_hops"] = int(param_set["blend_hops"])
+        modified_json["number_of_blend_layers"] = int(param_set["blend_hops"])
 
         # Save modified JSON
         with open(output_path, "w") as outfile:
@@ -161,7 +164,8 @@ if __name__ == "__main__":
         print(f"Writing results to: {file.name}")
         csv_writer = csv.writer(file)
         csv_writer.writerow(
-            [
+            param_set_header
+            + [
                 "network_diameter",
                 "msg_count",
                 "min_latency_sec",
@@ -190,6 +194,8 @@ if __name__ == "__main__":
 
         for idx, log_path in enumerate(log_paths):
             csv_row = []
+            csv_row.extend([param_sets[idx][key] for key in param_set_header])
+
             csv_row.append(topology_result(log_path)["diameter"])
 
             latency_analysis = latency.LatencyAnalysis.build(
