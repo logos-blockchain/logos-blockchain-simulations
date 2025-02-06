@@ -1,88 +1,113 @@
 # !/usr/bin/env python
 import argparse
 import json
-import statistics
-from collections.abc import Iterable
-from typing import Dict, Optional
+from dataclasses import asdict, dataclass
+from typing import Iterable
 
 import mixlog
+import pandas as pd
 
 
-class Message:
-    def __init__(self, message_id: str, step_a: Optional[int]):
-        self.id = message_id
-        self.step_a = int(step_a) if step_a is not None else None
-        self.step_b = None
+@dataclass
+class LatencyAnalysis:
+    total_messages: int
+    min_latency_ms: int
+    min_latency_analysis: "MessageLatencyAnalysis"
+    max_latency_ms: int
+    max_latency_analysis: "MessageLatencyAnalysis"
+    avg_latency_ms: int
+    median_latency_ms: int
+    conn_latency_analysis: "ConnectionLatencyAnalysis"
 
-    def __hash__(self):
-        return self.id
+    @classmethod
+    def build(cls, input_stream: Iterable[tuple[str, dict]]) -> "LatencyAnalysis":
+        latencies = []
+        message_ids = []
+        messages: dict[str, dict] = {}
+        for topic, record in input_stream:
+            if topic != "MessageFullyUnwrapped":
+                continue
+            latencies.append(record["total_duration"])
+            message_id = record["message"]["payload_id"]
+            message_ids.append(message_id)
+            messages[message_id] = record
 
-    def __repr__(self):
-        return f"[{self.id}] {self.step_a} -> {self.step_b}"
+        latencies = pd.Series(latencies)
+        message_ids = pd.Series(message_ids)
 
-    @property
-    def latency(self) -> Optional[int]:
-        if self.step_a is not None and self.step_b is not None:
-            return abs(self.step_a - self.step_b)
-
-
-MessageStorage = Dict[str, Message]
-
-
-def compute_results(message_storage: MessageStorage, step_duration: int) -> str:
-    latencies = [message_record.latency for message_record in message_storage.values()]
-    valued_latencies = [latency for latency in latencies if latency is not None]
-    incomplete_latencies = sum((1 for latency in latencies if latency is None))
-
-    total_messages = len(latencies)
-    total_messages_full_latency = len(valued_latencies)
-    total_messages_incomplete_latency = incomplete_latencies
-    latency_average_steps = statistics.mean(valued_latencies)
-    latency_average_ms = "{:.2f}ms".format(latency_average_steps * step_duration)
-    latency_median_steps = statistics.median(valued_latencies)
-    latency_median_ms = "{:.2f}ms".format(latency_median_steps * step_duration)
-    max_latency_steps = max(valued_latencies)
-    max_latency_ms = "{:.2f}ms".format(max_latency_steps * step_duration)
-    min_latency_steps = min(valued_latencies)
-    min_latency_ms = "{:.2f}ms".format(min_latency_steps * step_duration)
-
-    return f"""[Results]
-- Total messages: {total_messages}
-    - Full latencies: {total_messages_full_latency}
-    - Incomplete latencies: {total_messages_incomplete_latency}
-- Averages
-    - Steps: {latency_average_steps}
-    - Duration: {latency_average_ms}
-- Median
-    - Steps: {latency_median_steps}
-    - Duration: {latency_median_ms}
-- Max
-    - Steps: {max_latency_steps}
-    - Duration: {max_latency_ms}
-- Min
-    - Steps: {min_latency_steps}
-    - Duration: {min_latency_ms}"""
+        return cls(
+            total_messages=int(latencies.count()),
+            min_latency_ms=int(latencies.min()),
+            min_latency_analysis=MessageLatencyAnalysis.build(
+                messages[str(message_ids[latencies.idxmin()])]
+            ),
+            max_latency_ms=int(latencies.max()),
+            max_latency_analysis=MessageLatencyAnalysis.build(
+                messages[str(message_ids[latencies.idxmax()])]
+            ),
+            avg_latency_ms=int(latencies.mean()),
+            median_latency_ms=int(latencies.median()),
+            conn_latency_analysis=ConnectionLatencyAnalysis.build(messages),
+        )
 
 
-def parse_record_stream(record_stream: Iterable[str]) -> MessageStorage:
-    storage: MessageStorage = {}
+@dataclass
+class MessageLatencyAnalysis:
+    message_id: str
+    persistent_latencies_ms: list[int]
+    persistent_indices: list[int]
+    temporal_latencies_ms: list[int]
+    temporal_indices: list[int]
 
-    for record in record_stream:
-        try:
-            json_record = json.loads(record)
-        except json.decoder.JSONDecodeError:
-            continue
+    @classmethod
+    def build(
+        cls,
+        message: dict,
+    ) -> "MessageLatencyAnalysis":
+        analysis = cls(message["message"]["payload_id"], [], [], [], [])
 
-        if (payload_id := json_record.get("payload_id")) is None:
-            continue
-        step_id = json_record["step_id"]
+        for event in message["history"]:
+            event_type = event["event_type"]
+            if "PersistentTransmissionScheduled" in event_type:
+                analysis.persistent_indices.append(
+                    int(event_type["PersistentTransmissionScheduled"]["index"])
+                )
+            elif event_type == "PersistentTransmissionReleased":
+                analysis.persistent_latencies_ms.append(event["duration_from_prev"])
+            elif "TemporalProcessorScheduled" in event_type:
+                analysis.temporal_indices.append(
+                    int(event_type["TemporalProcessorScheduled"]["index"])
+                )
+            elif event_type == "TemporalProcessorReleased":
+                analysis.temporal_latencies_ms.append(event["duration_from_prev"])
 
-        if (stored_message := storage.get(payload_id)) is None:
-            storage[payload_id] = Message(payload_id, step_id)
-        else:
-            stored_message.step_b = step_id
+        return analysis
 
-    return storage
+
+@dataclass
+class ConnectionLatencyAnalysis:
+    min_ms: int
+    avg_ms: int
+    med_ms: int
+    max_ms: int
+
+    @classmethod
+    def build(
+        cls,
+        messages: dict[str, dict],
+    ) -> "ConnectionLatencyAnalysis":
+        latencies = []
+        for message in messages.values():
+            for event in message["history"]:
+                if "NetworkReceived" in event["event_type"]:
+                    latencies.append(event["duration_from_prev"])
+        latencies = pd.Series(latencies)
+        return cls(
+            int(latencies.min()),
+            int(latencies.mean()),
+            int(latencies.median()),
+            int(latencies.max()),
+        )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -105,8 +130,5 @@ if __name__ == "__main__":
     argument_parser = build_argument_parser()
     arguments = argument_parser.parse_args()
 
-    input_stream = mixlog.get_input_stream(arguments.input_file)
-    messages = parse_record_stream(input_stream)
-
-    results = compute_results(messages, arguments.step_duration)
-    print(results)
+    analysis = LatencyAnalysis.build(mixlog.get_input_stream(arguments.input_file))
+    print(json.dumps(asdict(analysis), indent=2))

@@ -10,6 +10,7 @@ use crate::node::blend::{BlendMessage, BlendnodeSettings};
 use anyhow::Ok;
 use clap::Parser;
 use crossbeam::channel;
+use multiaddr::Multiaddr;
 use netrunner::network::behaviour::create_behaviours;
 use netrunner::network::regions::{create_regions, RegionsData};
 use netrunner::network::{InMemoryNetworkInterface, Network, PayloadSize};
@@ -85,13 +86,26 @@ impl SimulationApp {
             &mut rng,
             &settings.simulation_settings.network_settings,
         );
+        log!(
+            "Regions",
+            regions
+                .iter()
+                .map(|(region, node_ids)| (region, node_ids.len()))
+                .collect::<HashMap<_, _>>()
+        );
+        log!("NumRegions", regions.len());
+
         let behaviours = create_behaviours(&settings.simulation_settings.network_settings);
         let regions_data = RegionsData::new(regions, behaviours);
 
-        let network = Arc::new(Mutex::new(Network::<BlendMessage>::new(regions_data, seed)));
+        let network = Arc::new(Mutex::new(Network::<BlendMessage>::new(
+            regions_data.clone(),
+            seed,
+        )));
 
         let topology = Topology::new(&node_ids, settings.connected_peers_count, &mut rng);
         log_topology(&topology);
+        log_conn_latency_distribution(&topology.conn_latency_distribution(&regions_data));
 
         let nodes: Vec<_> = node_ids
             .iter()
@@ -126,7 +140,14 @@ impl SimulationApp {
                             slots_per_epoch: settings.slots_per_epoch,
                             network_size: node_ids.len(),
                         },
-                        membership: node_ids.iter().map(|&id| id.into()).collect(),
+                        membership: node_ids
+                            .iter()
+                            .map(|&id| nomos_blend::membership::Node {
+                                id,
+                                address: Multiaddr::empty(),
+                                public_key: id.into(),
+                            })
+                            .collect(),
                     },
                 )
             })
@@ -176,6 +197,7 @@ fn create_boxed_blendnode(
     Box::new(BlendNode::new(
         node_id,
         blendnode_settings,
+        simulation_settings.step_time,
         network_interface,
     ))
 }
@@ -246,17 +268,38 @@ fn load_json_from_file<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
 }
 
 fn log_topology(topology: &Topology) {
-    let log = TopologyLog {
-        topology: topology.to_node_indices(),
-        diameter: topology.diameter(),
-    };
-    tracing::info!("Topology: {}", serde_json::to_string(&log).unwrap());
+    log!(
+        "Topology",
+        TopologyLog {
+            topology: topology.to_node_indices(),
+            diameter: topology.diameter(),
+        }
+    );
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TopologyLog {
     topology: HashMap<usize, Vec<usize>>,
     diameter: usize,
+}
+
+fn log_conn_latency_distribution(distribution: &HashMap<Duration, usize>) {
+    log!(
+        "ConnLatencyDistribution",
+        ConnLatencyDistributionLog {
+            num_links: distribution.values().sum(),
+            distribution: distribution
+                .iter()
+                .map(|(latency, count)| (latency.as_millis(), *count))
+                .collect::<HashMap<_, _>>(),
+        }
+    );
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ConnLatencyDistributionLog {
+    num_links: usize,
+    distribution: HashMap<u128, usize>,
 }
 
 fn main() -> anyhow::Result<()> {

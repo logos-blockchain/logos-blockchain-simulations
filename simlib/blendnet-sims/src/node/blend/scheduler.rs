@@ -44,14 +44,14 @@ impl Stream for Interval {
     }
 }
 
-pub struct TemporalRelease {
+pub struct TemporalScheduler {
     random_sleeps: Box<dyn Iterator<Item = Duration> + Send + Sync + 'static>,
     elapsed: Duration,
     current_sleep: Duration,
     update_time: channel::Receiver<Duration>,
 }
 
-impl TemporalRelease {
+impl TemporalScheduler {
     pub fn new<Rng: RngCore + Send + Sync + 'static>(
         mut rng: Rng,
         update_time: channel::Receiver<Duration>,
@@ -80,7 +80,7 @@ impl TemporalRelease {
     }
 }
 
-impl Stream for TemporalRelease {
+impl Stream for TemporalScheduler {
     type Item = ();
 
     fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -134,7 +134,7 @@ mod tests {
     fn temporal_release_update() {
         let (_tx, rx) = channel::unbounded();
         let mut temporal_release =
-            TemporalRelease::new(rand_chacha::ChaCha8Rng::from_entropy(), rx, (1, 1));
+            TemporalScheduler::new(rand_chacha::ChaCha8Rng::from_entropy(), rx, (1, 1));
 
         assert!(!temporal_release.update(Duration::from_secs(0)));
         assert!(!temporal_release.update(Duration::from_millis(999)));
@@ -149,7 +149,7 @@ mod tests {
 
         let (tx, rx) = channel::unbounded();
         let mut temporal_release =
-            TemporalRelease::new(rand_chacha::ChaCha8Rng::from_entropy(), rx, (1, 1));
+            TemporalScheduler::new(rand_chacha::ChaCha8Rng::from_entropy(), rx, (1, 1));
 
         tx.send(Duration::from_secs(0)).unwrap();
         assert_eq!(temporal_release.poll_next_unpin(&mut cx), Poll::Pending);
