@@ -1,3 +1,6 @@
+use netrunner::node::NodeId;
+use serde::Deserialize;
+use serde::Serialize;
 use uuid::Uuid;
 
 pub type PayloadId = String;
@@ -20,6 +23,58 @@ impl Payload {
     pub fn load(data: Vec<u8>) -> Self {
         assert_eq!(data.len(), 16);
         Self(data.try_into().unwrap())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageEvent {
+    pub payload_id: PayloadId,
+    pub step_id: usize,
+    #[serde(with = "node_id_serde")]
+    pub node_id: NodeId,
+    pub event_type: MessageEventType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MessageEventType {
+    Created,
+    PersistentTransmissionScheduled {
+        index: usize,
+    },
+    PersistentTransmissionReleased,
+    TemporalProcessorScheduled {
+        index: usize,
+    },
+    TemporalProcessorReleased,
+    NetworkSent {
+        #[serde(with = "node_id_serde")]
+        to: NodeId,
+    },
+    NetworkReceived {
+        #[serde(with = "node_id_serde")]
+        from: NodeId,
+    },
+    FullyUnwrapped,
+}
+
+mod node_id_serde {
+    use netrunner::node::{NodeId, NodeIdExt};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(node_id: &NodeId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(node_id.index().try_into().unwrap())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NodeId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(NodeId::from_index(
+            u64::deserialize(deserializer)?.try_into().unwrap(),
+        ))
     }
 }
 

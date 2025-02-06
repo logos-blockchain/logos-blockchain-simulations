@@ -1,0 +1,114 @@
+use core::panic;
+use std::{error::Error, ops::Mul, path::PathBuf, time::Duration};
+
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufRead, BufReader},
+};
+
+use polars::prelude::{AnyValue, NamedFrom, QuantileMethod, Scalar};
+use polars::series::Series;
+use serde::{Deserialize, Serialize};
+
+use crate::node::blend::log::TopicLog;
+use crate::node::blend::message::{MessageEvent, MessageEventType, PayloadId};
+
+pub fn analyze_message_latency(
+    log_file: PathBuf,
+    step_duration: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let file = File::open(log_file)?;
+    let reader = BufReader::new(file);
+
+    let mut messages: HashMap<PayloadId, usize> = HashMap::new();
+    let mut latencies_ms: Vec<i64> = Vec::new();
+    let mut latency_to_message: HashMap<i64, PayloadId> = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if let Ok(topic_log) = serde_json::from_str::<TopicLog<MessageEvent>>(&line) {
+            assert_eq!(topic_log.topic, "MessageEvent");
+            let event = topic_log.message;
+            match event.event_type {
+                MessageEventType::Created => {
+                    assert_eq!(messages.insert(event.payload_id, event.step_id), None);
+                }
+                MessageEventType::FullyUnwrapped => match messages.remove(&event.payload_id) {
+                    Some(created_step_id) => {
+                        let latency = step_duration
+                            .mul((event.step_id - created_step_id).try_into().unwrap())
+                            .as_millis()
+                            .try_into()
+                            .unwrap();
+                        latencies_ms.push(latency);
+                        latency_to_message.insert(latency, event.payload_id);
+                    }
+                    None => {
+                        panic!(
+                            "FullyUnwrapped event without Created event: {}",
+                            event.payload_id
+                        );
+                    }
+                },
+                _ => {
+                    continue;
+                }
+            }
+        }
+    }
+
+    let series = Series::new("latencies".into(), latencies_ms);
+    let series = Output::new(&series, &latency_to_message);
+    println!("{}", serde_json::to_string(&series).unwrap());
+
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Output {
+    count: usize,
+    min: i64,
+    min_payload_id: PayloadId,
+    q1: f64,
+    avg: f64,
+    med: f64,
+    q3: f64,
+    max: i64,
+    max_payload_id: PayloadId,
+}
+
+impl Output {
+    fn new(series: &Series, latency_to_message: &HashMap<i64, PayloadId>) -> Self {
+        let min = series.min::<i64>().unwrap().unwrap();
+        let min_payload_id = latency_to_message.get(&min).unwrap().clone();
+        let max = series.max::<i64>().unwrap().unwrap();
+        let max_payload_id = latency_to_message.get(&max).unwrap().clone();
+        Self {
+            count: series.len(),
+            min,
+            min_payload_id,
+            q1: quantile(series, 0.25),
+            avg: series.mean().unwrap(),
+            med: series.median().unwrap(),
+            q3: quantile(series, 0.75),
+            max,
+            max_payload_id,
+        }
+    }
+}
+
+pub(crate) fn quantile(series: &Series, quantile: f64) -> f64 {
+    f64_from_scalar(
+        &series
+            .quantile_reduce(quantile, QuantileMethod::Linear)
+            .unwrap(),
+    )
+}
+
+fn f64_from_scalar(scalar: &Scalar) -> f64 {
+    match scalar.value() {
+        AnyValue::Float64(value) => *value,
+        _ => panic!("Expected f64"),
+    }
+}

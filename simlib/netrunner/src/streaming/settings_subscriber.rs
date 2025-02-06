@@ -116,6 +116,7 @@ mod tests {
         },
         output_processors::OutData,
         runner::SimulationRunner,
+        streaming::io::tests::region_from_index,
         warding::SimulationState,
     };
 
@@ -156,43 +157,19 @@ mod tests {
             RegionsData {
                 regions: (0..6)
                     .map(|idx| {
-                        let region = match idx % 6 {
-                            0 => Region::Europe,
-                            1 => Region::NorthAmerica,
-                            2 => Region::SouthAmerica,
-                            3 => Region::Asia,
-                            4 => Region::Africa,
-                            5 => Region::Australia,
-                            _ => unreachable!(),
-                        };
+                        let region = region_from_index(idx);
                         (region, vec![NodeId::from_index(idx)])
                     })
                     .collect(),
                 node_region: (0..6)
                     .map(|idx| {
-                        let region = match idx % 6 {
-                            0 => Region::Europe,
-                            1 => Region::NorthAmerica,
-                            2 => Region::SouthAmerica,
-                            3 => Region::Asia,
-                            4 => Region::Africa,
-                            5 => Region::Australia,
-                            _ => unreachable!(),
-                        };
+                        let region = region_from_index(idx);
                         (NodeId::from_index(idx), region)
                     })
                     .collect(),
                 region_network_behaviour: (0..6)
                     .map(|idx| {
-                        let region = match idx % 6 {
-                            0 => Region::Europe,
-                            1 => Region::NorthAmerica,
-                            2 => Region::SouthAmerica,
-                            3 => Region::Asia,
-                            4 => Region::Africa,
-                            5 => Region::Australia,
-                            _ => unreachable!(),
-                        };
+                        let region = region_from_index(idx);
                         (
                             NetworkBehaviourKey::new(region, region),
                             NetworkBehaviour {

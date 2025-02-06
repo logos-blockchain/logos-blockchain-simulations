@@ -1,6 +1,8 @@
 pub mod consensus_streams;
+#[macro_use]
+pub mod log;
 pub mod lottery;
-mod message;
+pub mod message;
 pub mod scheduler;
 pub mod state;
 pub mod stream_wrapper;
@@ -11,41 +13,44 @@ use cached::{Cached, TimedCache};
 use crossbeam::channel;
 use futures::Stream;
 use lottery::StakeLottery;
-use message::{Payload, PayloadId};
-use multiaddr::Multiaddr;
+use message::{MessageEvent, MessageEventType, Payload};
 use netrunner::network::NetworkMessage;
-use netrunner::node::{Node, NodeId, NodeIdExt};
+use netrunner::node::{Node, NodeId};
 use netrunner::{
     network::{InMemoryNetworkInterface, NetworkInterface, PayloadSize},
     warding::WardCondition,
 };
+use nomos_blend::message_blend::temporal::{TemporalProcessorExt, TemporalStream};
 use nomos_blend::{
     cover_traffic::{CoverTraffic, CoverTrafficSettings},
     membership::Membership,
-    message_blend::{
-        crypto::CryptographicProcessor, MessageBlendExt, MessageBlendSettings, MessageBlendStream,
-    },
+    message_blend::{crypto::CryptographicProcessor, MessageBlendSettings},
     persistent_transmission::{
         PersistentTransmissionExt, PersistentTransmissionSettings, PersistentTransmissionStream,
     },
     BlendOutgoingMessage,
 };
 use nomos_blend_message::mock::MockBlendMessage;
+use nomos_blend_message::BlendMessage as _;
 use rand::SeedableRng;
 use rand_chacha::ChaCha12Rng;
-use scheduler::{Interval, TemporalRelease};
-use serde::{Deserialize, Serialize};
+use scheduler::{Interval, TemporalScheduler};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use state::BlendnodeState;
 use std::{pin::pin, task::Poll, time::Duration};
 use stream_wrapper::CrossbeamReceiverStream;
 
 #[derive(Debug, Clone)]
-pub struct BlendMessage(Vec<u8>);
+pub struct SimMessage(Vec<u8>);
 
-impl PayloadSize for BlendMessage {
+impl PayloadSize for SimMessage {
     fn size_bytes(&self) -> u32 {
-        2208
+        // payload: 32 KiB
+        // header encryption overhead: 133 bytes = 48 + 17 * max_blend_hops(=5)
+        // payload encryption overhaed: 16 bytes
+        // economic data overhead: 8043 bytes
+        40960
     }
 }
 
@@ -60,7 +65,12 @@ pub struct BlendnodeSettings {
     pub persistent_transmission: PersistentTransmissionSettings,
     pub message_blend: MessageBlendSettings<MockBlendMessage>,
     pub cover_traffic_settings: CoverTrafficSettings,
-    pub membership: Vec<<MockBlendMessage as nomos_blend_message::BlendMessage>::PublicKey>,
+    pub membership: Vec<
+        nomos_blend::membership::Node<
+            NodeId,
+            <MockBlendMessage as nomos_blend_message::BlendMessage>::PublicKey,
+        >,
+    >,
 }
 
 type Sha256Hash = [u8; 32];
@@ -70,30 +80,24 @@ pub struct BlendNode {
     id: NodeId,
     state: BlendnodeState,
     settings: BlendnodeSettings,
-    network_interface: InMemoryNetworkInterface<BlendMessage>,
+    network_interface: InMemoryNetworkInterface<SimMessage>,
     message_cache: TimedCache<Sha256Hash, ()>,
 
     data_msg_lottery_update_time_sender: channel::Sender<Duration>,
     data_msg_lottery_interval: Interval,
     data_msg_lottery: StakeLottery<ChaCha12Rng>,
 
-    persistent_sender: channel::Sender<Vec<u8>>,
+    persistent_sender: channel::Sender<SimMessage>,
     persistent_update_time_sender: channel::Sender<Duration>,
-    persistent_transmission_messages: PersistentTransmissionStream<
-        CrossbeamReceiverStream<Vec<u8>>,
-        ChaCha12Rng,
-        MockBlendMessage,
-        Interval,
-    >,
-    crypto_processor: CryptographicProcessor<ChaCha12Rng, MockBlendMessage>,
-    blend_sender: channel::Sender<Vec<u8>>,
-    blend_update_time_sender: channel::Sender<Duration>,
-    blend_messages: MessageBlendStream<
-        CrossbeamReceiverStream<Vec<u8>>,
-        ChaCha12Rng,
-        MockBlendMessage,
-        TemporalRelease,
-    >,
+    persistent_transmission_messages:
+        PersistentTransmissionStream<CrossbeamReceiverStream<SimMessage>, ChaCha12Rng, Interval>,
+
+    crypto_processor: CryptographicProcessor<NodeId, ChaCha12Rng, MockBlendMessage>,
+    temporal_sender: channel::Sender<BlendOutgoingMessage>,
+    temporal_update_time_sender: channel::Sender<Duration>,
+    temporal_processor_messages:
+        TemporalStream<CrossbeamReceiverStream<BlendOutgoingMessage>, TemporalScheduler>,
+
     epoch_update_sender: channel::Sender<Duration>,
     slot_update_sender: channel::Sender<Duration>,
     cover_traffic: CoverTraffic<Epoch, Slot, MockBlendMessage>,
@@ -103,7 +107,7 @@ impl BlendNode {
     pub fn new(
         id: NodeId,
         settings: BlendnodeSettings,
-        network_interface: InMemoryNetworkInterface<BlendMessage>,
+        network_interface: InMemoryNetworkInterface<SimMessage>,
     ) -> Self {
         let mut rng_generator = ChaCha12Rng::seed_from_u64(settings.seed);
 
@@ -120,7 +124,7 @@ impl BlendNode {
         );
 
         // Init Tier-1: Persistent transmission
-        let (persistent_sender, persistent_receiver) = channel::unbounded();
+        let (persistent_sender, persistent_receiver) = channel::unbounded::<SimMessage>();
         let (persistent_update_time_sender, persistent_update_time_receiver) = channel::unbounded();
         let persistent_transmission_messages = CrossbeamReceiverStream::new(persistent_receiver)
             .persistent_transmission(
@@ -132,43 +136,28 @@ impl BlendNode {
                     ),
                     persistent_update_time_receiver,
                 ),
+                SimMessage(MockBlendMessage::DROP_MESSAGE.to_vec()),
             );
 
-        // Init Tier-2: message blend
-        let (blend_sender, blend_receiver) = channel::unbounded();
-        let (blend_update_time_sender, blend_update_time_receiver) = channel::unbounded();
-        let nodes: Vec<
-            nomos_blend::membership::Node<
-                <MockBlendMessage as nomos_blend_message::BlendMessage>::PublicKey,
-            >,
-        > = settings
-            .membership
-            .iter()
-            .map(|&public_key| nomos_blend::membership::Node {
-                address: Multiaddr::empty(),
-                public_key,
-            })
-            .collect();
-        let membership = Membership::<MockBlendMessage>::new(nodes, id.into());
+        // Init Tier-2: message blend: CryptographicProcessor and TemporalProcessor
+        let membership =
+            Membership::<NodeId, MockBlendMessage>::new(settings.membership.clone(), id.into());
         let crypto_processor = CryptographicProcessor::new(
             settings.message_blend.cryptographic_processor.clone(),
             membership.clone(),
             ChaCha12Rng::from_rng(&mut rng_generator).unwrap(),
         );
-        let temporal_release = TemporalRelease::new(
-            ChaCha12Rng::from_rng(&mut rng_generator).unwrap(),
-            blend_update_time_receiver,
-            (
-                1,
-                settings.message_blend.temporal_processor.max_delay_seconds,
-            ),
-        );
-        let blend_messages = CrossbeamReceiverStream::new(blend_receiver).blend(
-            settings.message_blend.clone(),
-            membership,
-            temporal_release,
-            ChaCha12Rng::from_rng(&mut rng_generator).unwrap(),
-        );
+        let (temporal_sender, temporal_receiver) = channel::unbounded();
+        let (temporal_update_time_sender, temporal_update_time_receiver) = channel::unbounded();
+        let temporal_processor_messages = CrossbeamReceiverStream::new(temporal_receiver)
+            .temporal_stream(TemporalScheduler::new(
+                ChaCha12Rng::from_rng(&mut rng_generator).unwrap(),
+                temporal_update_time_receiver,
+                (
+                    0,
+                    settings.message_blend.temporal_processor.max_delay_seconds,
+                ),
+            ));
 
         // tier 3 cover traffic
         let (epoch_update_sender, epoch_updater_update_receiver) = channel::unbounded();
@@ -194,6 +183,8 @@ impl BlendNode {
                 node_id: id,
                 step_id: 0,
                 num_messages_fully_unwrapped: 0,
+                cur_num_persistent_scheduled: 0,
+                cur_num_temporal_scheduled: 0,
             },
             data_msg_lottery_update_time_sender,
             data_msg_lottery_interval,
@@ -202,43 +193,57 @@ impl BlendNode {
             persistent_update_time_sender,
             persistent_transmission_messages,
             crypto_processor,
-            blend_sender,
-            blend_update_time_sender,
-            blend_messages,
+            temporal_sender,
+            temporal_update_time_sender,
+            temporal_processor_messages,
             epoch_update_sender,
             slot_update_sender,
             cover_traffic,
         }
     }
 
-    fn forward(
-        &mut self,
-        message: BlendMessage,
-        exclude_node: Option<NodeId>,
-        log: Option<EmissionLog>,
-    ) {
-        for (i, node_id) in self
+    fn parse_payload(message: &[u8]) -> Payload {
+        Payload::load(MockBlendMessage::payload(message).unwrap())
+    }
+
+    fn forward(&mut self, message: SimMessage, exclude_node: Option<NodeId>) {
+        let payload_id = Self::parse_payload(&message.0).id();
+        for node_id in self
             .settings
             .connected_peers
             .iter()
             .filter(|&id| Some(*id) != exclude_node)
-            .enumerate()
         {
-            if i == 0 {
-                if let Some(log) = &log {
-                    Self::log_emission(log);
+            log!(
+                "MessageEvent",
+                MessageEvent {
+                    payload_id: payload_id.clone(),
+                    step_id: self.state.step_id,
+                    node_id: self.id,
+                    event_type: MessageEventType::NetworkSent { to: *node_id }
                 }
-            }
+            );
             self.network_interface
                 .send_message(*node_id, message.clone())
         }
         self.message_cache.cache_set(Self::sha256(&message.0), ());
     }
 
-    fn receive(&mut self) -> Vec<NetworkMessage<BlendMessage>> {
+    fn receive(&mut self) -> Vec<NetworkMessage<SimMessage>> {
         self.network_interface
             .receive_messages()
             .into_iter()
+            .inspect(|msg| {
+                log!(
+                    "MessageEvent",
+                    MessageEvent {
+                        payload_id: Self::parse_payload(&msg.payload().0).id(),
+                        step_id: self.state.step_id,
+                        node_id: self.id,
+                        event_type: MessageEventType::NetworkReceived { from: msg.from }
+                    }
+                );
+            })
             // Retain only messages that have not been seen before
             .filter(|msg| {
                 self.message_cache
@@ -254,43 +259,67 @@ impl BlendNode {
         hasher.finalize().into()
     }
 
+    fn schedule_persistent_transmission(&mut self, message: SimMessage) {
+        log!(
+            "MessageEvent",
+            MessageEvent {
+                payload_id: Self::parse_payload(&message.0).id(),
+                step_id: self.state.step_id,
+                node_id: self.id,
+                event_type: MessageEventType::PersistentTransmissionScheduled {
+                    index: self.state.cur_num_persistent_scheduled
+                }
+            }
+        );
+        self.persistent_sender.send(message).unwrap();
+        self.state.cur_num_persistent_scheduled += 1;
+    }
+
+    fn handle_incoming_message(&mut self, message: SimMessage) {
+        match self.crypto_processor.unwrap_message(&message.0) {
+            Ok((unwrapped_message, fully_unwrapped)) => {
+                let temporal_message = if fully_unwrapped {
+                    BlendOutgoingMessage::FullyUnwrapped(unwrapped_message)
+                } else {
+                    BlendOutgoingMessage::Outbound(unwrapped_message)
+                };
+
+                self.schedule_temporal_processor(temporal_message);
+            }
+            Err(e) => {
+                tracing::debug!("Failed to unwrap message: {:?}", e);
+            }
+        }
+    }
+
+    fn schedule_temporal_processor(&mut self, message: BlendOutgoingMessage) {
+        log!(
+            "MessageEvent",
+            MessageEvent {
+                payload_id: match &message {
+                    BlendOutgoingMessage::Outbound(msg) => Self::parse_payload(msg).id(),
+                    BlendOutgoingMessage::FullyUnwrapped(payload) =>
+                        Payload::load(payload.clone()).id(),
+                },
+                step_id: self.state.step_id,
+                node_id: self.id,
+                event_type: MessageEventType::TemporalProcessorScheduled {
+                    index: self.state.cur_num_temporal_scheduled
+                }
+            }
+        );
+        self.temporal_sender.send(message).unwrap();
+        self.state.cur_num_temporal_scheduled += 1;
+    }
+
     fn update_time(&mut self, elapsed: Duration) {
         self.data_msg_lottery_update_time_sender
             .send(elapsed)
             .unwrap();
         self.persistent_update_time_sender.send(elapsed).unwrap();
-        self.blend_update_time_sender.send(elapsed).unwrap();
+        self.temporal_update_time_sender.send(elapsed).unwrap();
         self.epoch_update_sender.send(elapsed).unwrap();
         self.slot_update_sender.send(elapsed).unwrap();
-    }
-
-    fn log_message_generated(&self, msg_type: &str, payload: &Payload) {
-        self.log_message(format!("{}MessageGenerated", msg_type).as_str(), payload);
-    }
-
-    fn log_message_fully_unwrapped(&self, payload: &Payload) {
-        self.log_message("MessageFullyUnwrapped", payload);
-    }
-
-    fn log_message(&self, tag: &str, payload: &Payload) {
-        let log = MessageLog {
-            payload_id: payload.id(),
-            step_id: self.state.step_id,
-            node_id: self.id.index(),
-        };
-        tracing::info!("{}: {}", tag, serde_json::to_string(&log).unwrap());
-    }
-
-    fn log_emission(log: &EmissionLog) {
-        tracing::info!("Emission: {}", serde_json::to_string(log).unwrap());
-    }
-
-    fn new_emission_log(&self, emission_type: &str) -> EmissionLog {
-        EmissionLog {
-            emission_type: emission_type.to_string(),
-            step_id: self.state.step_id,
-            node_id: self.id.index(),
-        }
     }
 }
 
@@ -316,38 +345,72 @@ impl Node for BlendNode {
         if let Poll::Ready(Some(_)) = pin!(&mut self.data_msg_lottery_interval).poll_next(&mut cx) {
             if self.data_msg_lottery.run() {
                 let payload = Payload::new();
-                self.log_message_generated("Data", &payload);
                 let message = self
                     .crypto_processor
                     .wrap_message(payload.as_bytes())
                     .unwrap();
-                self.persistent_sender.send(message).unwrap();
+                log!(
+                    "MessageEvent",
+                    MessageEvent {
+                        payload_id: payload.id(),
+                        step_id: self.state.step_id,
+                        node_id: self.id,
+                        event_type: MessageEventType::Created
+                    }
+                );
+                self.schedule_persistent_transmission(SimMessage(message));
             }
         }
 
         // Handle incoming messages
         for network_message in self.receive() {
+            if MockBlendMessage::is_drop_message(&network_message.payload().0) {
+                continue;
+            }
+
             self.forward(
                 network_message.payload().clone(),
                 Some(network_message.from),
-                None,
             );
-            self.blend_sender
-                .send(network_message.into_payload().0)
-                .unwrap();
+            self.handle_incoming_message(network_message.into_payload());
         }
 
-        // Proceed message blend
-        if let Poll::Ready(Some(msg)) = pin!(&mut self.blend_messages).poll_next(&mut cx) {
+        // Proceed temporal processor
+        if let Poll::Ready(Some(msg)) =
+            pin!(&mut self.temporal_processor_messages).poll_next(&mut cx)
+        {
+            log!(
+                "MessageEvent",
+                MessageEvent {
+                    payload_id: match &msg {
+                        BlendOutgoingMessage::Outbound(msg) => Self::parse_payload(msg).id(),
+                        BlendOutgoingMessage::FullyUnwrapped(payload) =>
+                            Payload::load(payload.clone()).id(),
+                    },
+                    step_id: self.state.step_id,
+                    node_id: self.id,
+                    event_type: MessageEventType::TemporalProcessorReleased
+                }
+            );
+            self.state.cur_num_temporal_scheduled -= 1;
+
+            // Proceed the message
             match msg {
-                BlendOutgoingMessage::Outbound(msg) => {
-                    self.persistent_sender.send(msg).unwrap();
+                BlendOutgoingMessage::Outbound(message) => {
+                    self.schedule_persistent_transmission(SimMessage(message));
                 }
                 BlendOutgoingMessage::FullyUnwrapped(payload) => {
                     let payload = Payload::load(payload);
-                    self.log_message_fully_unwrapped(&payload);
+                    log!(
+                        "MessageEvent",
+                        MessageEvent {
+                            payload_id: payload.id(),
+                            step_id: self.state.step_id,
+                            node_id: self.id,
+                            event_type: MessageEventType::FullyUnwrapped
+                        }
+                    );
                     self.state.num_messages_fully_unwrapped += 1;
-                    //TODO: create a tracing event
                 }
             }
         }
@@ -355,23 +418,37 @@ impl Node for BlendNode {
         // Generate a cover message probabilistically
         if let Poll::Ready(Some(_)) = pin!(&mut self.cover_traffic).poll_next(&mut cx) {
             let payload = Payload::new();
-            self.log_message_generated("Cover", &payload);
             let message = self
                 .crypto_processor
                 .wrap_message(payload.as_bytes())
                 .unwrap();
-            self.persistent_sender.send(message).unwrap();
+            log!(
+                "MessageEvent",
+                MessageEvent {
+                    payload_id: payload.id(),
+                    step_id: self.state.step_id,
+                    node_id: self.id,
+                    event_type: MessageEventType::Created
+                }
+            );
+            self.schedule_persistent_transmission(SimMessage(message));
         }
 
         // Proceed persistent transmission
         if let Poll::Ready(Some(msg)) =
             pin!(&mut self.persistent_transmission_messages).poll_next(&mut cx)
         {
-            self.forward(
-                BlendMessage(msg),
-                None,
-                Some(self.new_emission_log("FromPersistent")),
+            log!(
+                "MessageEvent",
+                MessageEvent {
+                    payload_id: Self::parse_payload(&msg.0).id(),
+                    step_id: self.state.step_id,
+                    node_id: self.id,
+                    event_type: MessageEventType::PersistentTransmissionReleased
+                }
             );
+            self.state.cur_num_persistent_scheduled -= 1;
+            self.forward(msg, None);
         }
 
         self.state.step_id += 1;
@@ -386,18 +463,4 @@ impl Node for BlendNode {
             }
         }
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct MessageLog {
-    payload_id: PayloadId,
-    step_id: usize,
-    node_id: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct EmissionLog {
-    emission_type: String,
-    step_id: usize,
-    node_id: usize,
 }

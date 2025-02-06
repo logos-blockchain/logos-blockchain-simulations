@@ -1,6 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
-use netrunner::node::{NodeId, NodeIdExt};
+use netrunner::{
+    network::regions::RegionsData,
+    node::{NodeId, NodeIdExt},
+};
 use rand::{seq::SliceRandom, RngCore};
 
 #[derive(Clone)]
@@ -119,6 +125,28 @@ impl Topology {
                 .collect();
         }
         hop_count
+    }
+
+    pub fn conn_latency_distribution(
+        &self,
+        regions_data: &RegionsData,
+    ) -> HashMap<Duration, usize> {
+        // Initialize a distribution
+        let distribution = regions_data
+            .region_network_behaviour
+            .values()
+            .map(|behaviour| (behaviour.delay(), 0))
+            .collect();
+        // Populate the distribution
+        self.0.iter().fold(distribution, |mut acc, (node, peers)| {
+            let region_a = regions_data.node_region(*node);
+            peers.iter().for_each(|peer| {
+                let region_b = regions_data.node_region(*peer);
+                let behaviour = regions_data.network_behaviour_between_regions(region_a, region_b);
+                acc.entry(behaviour.delay()).and_modify(|count| *count += 1);
+            });
+            acc
+        })
     }
 
     pub fn get(&self, node: &NodeId) -> Option<&HashSet<NodeId>> {

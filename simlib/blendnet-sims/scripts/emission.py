@@ -1,16 +1,14 @@
 import argparse
-import json
 from collections.abc import Iterable
 from typing import Any
 
 import matplotlib
 import matplotlib.pyplot as plt
+import mixlog
 import pandas as pd
 
-import mixlog
 
-
-def plot_emissions(input_stream: Iterable[str], plot_path: str) -> None:
+def plot_emissions(input_stream: Iterable[tuple[str, dict]], plot_path: str) -> None:
     df = pd.DataFrame(emission_records(input_stream))
 
     plt.figure(figsize=(12, 6))
@@ -24,19 +22,8 @@ def plot_emissions(input_stream: Iterable[str], plot_path: str) -> None:
         plt.show()
 
 
-def emission_records(input_stream: Iterable[str]) -> list[Any]:
-    records = []
-
-    for line in input_stream:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        if "emission_type" in record:
-            records.append(record)
-
-    return records
+def emission_records(input_stream: Iterable[tuple[str, dict]]) -> list[Any]:
+    return [record for _, record in filter(lambda x: x[0] == "Emission", input_stream)]
 
 
 if __name__ == "__main__":

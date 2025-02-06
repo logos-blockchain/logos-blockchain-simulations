@@ -6,10 +6,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // crates
 use crate::node::blend::state::{BlendnodeRecord, BlendnodeState};
-use crate::node::blend::{BlendMessage, BlendnodeSettings};
+use crate::node::blend::{BlendnodeSettings, SimMessage};
+use analysis::conn_latency::analyze_connection_latency;
+use analysis::message_history::analyze_message_history;
+use analysis::message_latency::analyze_message_latency;
 use anyhow::Ok;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossbeam::channel;
+use multiaddr::Multiaddr;
 use netrunner::network::behaviour::create_behaviours;
 use netrunner::network::regions::{create_regions, RegionsData};
 use netrunner::network::{InMemoryNetworkInterface, Network, PayloadSize};
@@ -17,6 +21,7 @@ use netrunner::node::{NodeId, NodeIdExt};
 use netrunner::output_processors::Record;
 use netrunner::runner::{BoxedNode, SimulationRunnerHandle};
 use netrunner::streaming::{io::IOSubscriber, naive::NaiveSubscriber, StreamType};
+use node::blend::message::PayloadId;
 use node::blend::topology::Topology;
 use nomos_blend::cover_traffic::CoverTrafficSettings;
 use nomos_blend::message_blend::{
@@ -33,9 +38,37 @@ use crate::node::blend::BlendNode;
 use crate::settings::SimSettings;
 use netrunner::{runner::SimulationRunner, settings::SimulationSettings};
 
+pub mod analysis;
 mod log;
 mod node;
 mod settings;
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the simulation
+    Run(SimulationApp),
+    /// Analyze the simulation results
+    Analyze {
+        #[command(subcommand)]
+        command: AnalyzeCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AnalyzeCommands {
+    /// Analyze the latency of the messages fully unwrapped
+    MessageLatency(MessageLatencyApp),
+    /// Analyze the history of a message
+    MessageHistory(MessageHistoryApp),
+    /// Analyze connection latency
+    ConnectionLatency(ConnectionLatencyApp),
+}
 
 /// Main simulation wrapper
 /// Pipes together the cli arguments with the execution
@@ -85,13 +118,25 @@ impl SimulationApp {
             &mut rng,
             &settings.simulation_settings.network_settings,
         );
+        log!(
+            "Regions",
+            regions
+                .iter()
+                .map(|(region, node_ids)| (*region, node_ids.len()))
+                .collect::<HashMap<_, _>>()
+        );
+
         let behaviours = create_behaviours(&settings.simulation_settings.network_settings);
         let regions_data = RegionsData::new(regions, behaviours);
 
-        let network = Arc::new(Mutex::new(Network::<BlendMessage>::new(regions_data, seed)));
+        let network = Arc::new(Mutex::new(Network::<SimMessage>::new(
+            regions_data.clone(),
+            seed,
+        )));
 
         let topology = Topology::new(&node_ids, settings.connected_peers_count, &mut rng);
         log_topology(&topology);
+        log_conn_latency_distribution(&topology.conn_latency_distribution(&regions_data));
 
         let nodes: Vec<_> = node_ids
             .iter()
@@ -126,7 +171,14 @@ impl SimulationApp {
                             slots_per_epoch: settings.slots_per_epoch,
                             network_size: node_ids.len(),
                         },
-                        membership: node_ids.iter().map(|&id| id.into()).collect(),
+                        membership: node_ids
+                            .iter()
+                            .map(|&id| nomos_blend::membership::Node {
+                                id,
+                                address: Multiaddr::empty(),
+                                public_key: id.into(),
+                            })
+                            .collect(),
                     },
                 )
             })
@@ -141,7 +193,7 @@ impl SimulationApp {
 
 fn create_boxed_blendnode(
     node_id: NodeId,
-    network: &mut Network<BlendMessage>,
+    network: &mut Network<SimMessage>,
     simulation_settings: SimulationSettings,
     no_netcap: bool,
     blendnode_settings: BlendnodeSettings,
@@ -246,11 +298,13 @@ fn load_json_from_file<T: DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
 }
 
 fn log_topology(topology: &Topology) {
-    let log = TopologyLog {
-        topology: topology.to_node_indices(),
-        diameter: topology.diameter(),
-    };
-    tracing::info!("Topology: {}", serde_json::to_string(&log).unwrap());
+    log!(
+        "Topology",
+        TopologyLog {
+            topology: topology.to_node_indices(),
+            diameter: topology.diameter(),
+        }
+    );
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -259,14 +313,88 @@ struct TopologyLog {
     diameter: usize,
 }
 
-fn main() -> anyhow::Result<()> {
-    let app: SimulationApp = SimulationApp::parse();
-    let maybe_guard = log::config_tracing(app.log_format, &app.log_to, app.with_metrics);
+fn log_conn_latency_distribution(distribution: &HashMap<Duration, usize>) {
+    log!(
+        "ConnLatencyDistribution",
+        ConnLatencyDistributionLog {
+            num_links: distribution.values().sum(),
+            distribution: distribution
+                .iter()
+                .map(|(latency, count)| (latency.as_millis(), *count))
+                .collect::<HashMap<_, _>>(),
+        }
+    );
+}
 
-    if let Err(e) = app.run() {
-        tracing::error!("error: {}", e);
-        drop(maybe_guard);
-        std::process::exit(1);
+#[derive(Debug, Serialize, Deserialize)]
+struct ConnLatencyDistributionLog {
+    num_links: usize,
+    distribution: HashMap<u128, usize>,
+}
+
+#[derive(Parser)]
+struct MessageLatencyApp {
+    #[clap(long, short)]
+    log_file: PathBuf,
+    #[clap(long, short, value_parser = humantime::parse_duration)]
+    step_duration: Duration,
+}
+
+#[derive(Parser)]
+struct MessageHistoryApp {
+    #[clap(long, short)]
+    log_file: PathBuf,
+    #[clap(long, short, value_parser = humantime::parse_duration)]
+    step_duration: Duration,
+    #[clap(long, short)]
+    payload_id: PayloadId,
+}
+
+#[derive(Parser)]
+struct ConnectionLatencyApp {
+    #[clap(long, short)]
+    log_file: PathBuf,
+    #[clap(long, short, value_parser = humantime::parse_duration)]
+    step_duration: Duration,
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Run(app) => {
+            let maybe_guard = log::config_tracing(app.log_format, &app.log_to, app.with_metrics);
+
+            if let Err(e) = app.run() {
+                tracing::error!("error: {}", e);
+                drop(maybe_guard);
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Commands::Analyze { command } => match command {
+            AnalyzeCommands::MessageLatency(app) => {
+                if let Err(e) = analyze_message_latency(app.log_file, app.step_duration) {
+                    tracing::error!("error: {}", e);
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
+            AnalyzeCommands::MessageHistory(app) => {
+                if let Err(e) =
+                    analyze_message_history(app.log_file, app.step_duration, app.payload_id)
+                {
+                    tracing::error!("error: {}", e);
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
+            AnalyzeCommands::ConnectionLatency(app) => {
+                if let Err(e) = analyze_connection_latency(app.log_file, app.step_duration) {
+                    tracing::error!("error: {}", e);
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
+        },
     }
-    Ok(())
 }
