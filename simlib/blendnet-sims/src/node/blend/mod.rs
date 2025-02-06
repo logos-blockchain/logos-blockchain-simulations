@@ -178,7 +178,7 @@ impl BlendNode {
                 ChaCha12Rng::from_rng(&mut rng_generator).unwrap(),
                 temporal_update_time_receiver,
                 (
-                    1,
+                    0,
                     settings.message_blend.temporal_processor.max_delay_seconds,
                 ),
             ));
