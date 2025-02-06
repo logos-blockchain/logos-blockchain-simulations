@@ -67,7 +67,11 @@ impl BlendMessage {
 
 impl PayloadSize for BlendMessage {
     fn size_bytes(&self) -> u32 {
-        2208
+        // payload: 32 KiB
+        // header encryption overhead: 133 bytes = 48 + 17 * max_blend_hops(=5)
+        // payload encryption overhaed: 16 bytes
+        // economic data overhead: 8043 bytes
+        40960
     }
 }
 
