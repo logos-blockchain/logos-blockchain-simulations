@@ -178,6 +178,10 @@ if __name__ == "__main__":
                 "max_latency_msg_persistent_index",
                 "max_latency_msg_temporal_latency_sec",
                 "max_latency_msg_temporal_index",
+                "min_conn_latency_sec",
+                "avg_conn_latency_sec",
+                "med_conn_latency_sec",
+                "max_conn_latency_sec",
                 "min_bandwidth_kbps",
                 "avg_bandwidth_kbps",
                 "max_bandwidth_kbps",
@@ -261,6 +265,18 @@ if __name__ == "__main__":
                 ",".join(
                     map(str, latency_analysis.max_latency_analysis.temporal_indices)
                 )
+            )
+            csv_row.append(
+                float(latency_analysis.conn_latency_analysis.min_ms) / 1000.0
+            )
+            csv_row.append(
+                float(latency_analysis.conn_latency_analysis.avg_ms) / 1000.0
+            )
+            csv_row.append(
+                float(latency_analysis.conn_latency_analysis.med_ms) / 1000.0
+            )
+            csv_row.append(
+                float(latency_analysis.conn_latency_analysis.max_ms) / 1000.0
             )
 
             bandwidth_res = bandwidth_result(log_path, args.step_duration)

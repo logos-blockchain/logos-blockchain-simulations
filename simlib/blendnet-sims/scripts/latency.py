@@ -17,6 +17,7 @@ class LatencyAnalysis:
     max_latency_analysis: "MessageLatencyAnalysis"
     avg_latency_ms: int
     median_latency_ms: int
+    conn_latency_analysis: "ConnectionLatencyAnalysis"
 
     @classmethod
     def build(cls, input_stream: Iterable[tuple[str, dict]]) -> "LatencyAnalysis":
@@ -35,17 +36,18 @@ class LatencyAnalysis:
         message_ids = pd.Series(message_ids)
 
         return cls(
-            int(latencies.count()),
-            int(latencies.min()),
-            MessageLatencyAnalysis.build(
+            total_messages=int(latencies.count()),
+            min_latency_ms=int(latencies.min()),
+            min_latency_analysis=MessageLatencyAnalysis.build(
                 messages[str(message_ids[latencies.idxmin()])]
             ),
-            int(latencies.max()),
-            MessageLatencyAnalysis.build(
+            max_latency_ms=int(latencies.max()),
+            max_latency_analysis=MessageLatencyAnalysis.build(
                 messages[str(message_ids[latencies.idxmax()])]
             ),
-            int(latencies.mean()),
-            int(latencies.median()),
+            avg_latency_ms=int(latencies.mean()),
+            median_latency_ms=int(latencies.median()),
+            conn_latency_analysis=ConnectionLatencyAnalysis.build(messages),
         )
 
 
@@ -80,6 +82,32 @@ class MessageLatencyAnalysis:
                 analysis.temporal_latencies_ms.append(event["duration_from_prev"])
 
         return analysis
+
+
+@dataclass
+class ConnectionLatencyAnalysis:
+    min_ms: int
+    avg_ms: int
+    med_ms: int
+    max_ms: int
+
+    @classmethod
+    def build(
+        cls,
+        messages: dict[str, dict],
+    ) -> "ConnectionLatencyAnalysis":
+        latencies = []
+        for message in messages.values():
+            for event in message["history"]:
+                if "NetworkReceived" in event["event_type"]:
+                    latencies.append(event["duration_from_prev"])
+        latencies = pd.Series(latencies)
+        return cls(
+            int(latencies.min()),
+            int(latencies.mean()),
+            int(latencies.median()),
+            int(latencies.max()),
+        )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
