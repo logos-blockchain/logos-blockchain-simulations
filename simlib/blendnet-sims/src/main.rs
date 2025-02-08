@@ -6,9 +6,11 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // crates
 use crate::node::blend::state::{BlendnodeRecord, BlendnodeState};
-use crate::node::blend::{BlendMessage, BlendnodeSettings};
+use crate::node::blend::{BlendnodeSettings, SimMessage};
+use analysis::history::analyze_message_history;
+use analysis::latency::analyze_latency;
 use anyhow::Ok;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossbeam::channel;
 use multiaddr::Multiaddr;
 use netrunner::network::behaviour::create_behaviours;
@@ -18,6 +20,7 @@ use netrunner::node::{NodeId, NodeIdExt};
 use netrunner::output_processors::Record;
 use netrunner::runner::{BoxedNode, SimulationRunnerHandle};
 use netrunner::streaming::{io::IOSubscriber, naive::NaiveSubscriber, StreamType};
+use node::blend::message::PayloadId;
 use node::blend::topology::Topology;
 use nomos_blend::cover_traffic::CoverTrafficSettings;
 use nomos_blend::message_blend::{
@@ -34,9 +37,35 @@ use crate::node::blend::BlendNode;
 use crate::settings::SimSettings;
 use netrunner::{runner::SimulationRunner, settings::SimulationSettings};
 
+pub mod analysis;
 mod log;
 mod node;
 mod settings;
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the simulation
+    Run(SimulationApp),
+    /// Analyze the simulation results
+    Analyze {
+        #[command(subcommand)]
+        command: AnalyzeCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AnalyzeCommands {
+    /// Analyze the latency of the messages fully unwrapped
+    Latency(AnalyzeLatencyApp),
+    /// Analyze the history of a message
+    MessageHistory(MessageHistoryApp),
+}
 
 /// Main simulation wrapper
 /// Pipes together the cli arguments with the execution
@@ -90,15 +119,14 @@ impl SimulationApp {
             "Regions",
             regions
                 .iter()
-                .map(|(region, node_ids)| (region, node_ids.len()))
+                .map(|(region, node_ids)| (*region, node_ids.len()))
                 .collect::<HashMap<_, _>>()
         );
-        log!("NumRegions", regions.len());
 
         let behaviours = create_behaviours(&settings.simulation_settings.network_settings);
         let regions_data = RegionsData::new(regions, behaviours);
 
-        let network = Arc::new(Mutex::new(Network::<BlendMessage>::new(
+        let network = Arc::new(Mutex::new(Network::<SimMessage>::new(
             regions_data.clone(),
             seed,
         )));
@@ -162,7 +190,7 @@ impl SimulationApp {
 
 fn create_boxed_blendnode(
     node_id: NodeId,
-    network: &mut Network<BlendMessage>,
+    network: &mut Network<SimMessage>,
     simulation_settings: SimulationSettings,
     no_netcap: bool,
     blendnode_settings: BlendnodeSettings,
@@ -197,7 +225,6 @@ fn create_boxed_blendnode(
     Box::new(BlendNode::new(
         node_id,
         blendnode_settings,
-        simulation_settings.step_time,
         network_interface,
     ))
 }
@@ -302,14 +329,54 @@ struct ConnLatencyDistributionLog {
     distribution: HashMap<u128, usize>,
 }
 
-fn main() -> anyhow::Result<()> {
-    let app: SimulationApp = SimulationApp::parse();
-    let maybe_guard = log::config_tracing(app.log_format, &app.log_to, app.with_metrics);
+#[derive(Parser)]
+struct AnalyzeLatencyApp {
+    #[clap(long, short)]
+    log_file: PathBuf,
+    #[clap(long, short, value_parser = humantime::parse_duration)]
+    step_duration: Duration,
+}
 
-    if let Err(e) = app.run() {
-        tracing::error!("error: {}", e);
-        drop(maybe_guard);
-        std::process::exit(1);
+#[derive(Parser)]
+struct MessageHistoryApp {
+    #[clap(long, short)]
+    log_file: PathBuf,
+    #[clap(long, short, value_parser = humantime::parse_duration)]
+    step_duration: Duration,
+    #[clap(long, short)]
+    payload_id: PayloadId,
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Commands::Run(app) => {
+            let maybe_guard = log::config_tracing(app.log_format, &app.log_to, app.with_metrics);
+
+            if let Err(e) = app.run() {
+                tracing::error!("error: {}", e);
+                drop(maybe_guard);
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Commands::Analyze { command } => match command {
+            AnalyzeCommands::Latency(app) => {
+                if let Err(e) = analyze_latency(app.log_file, app.step_duration) {
+                    tracing::error!("error: {}", e);
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
+            AnalyzeCommands::MessageHistory(app) => {
+                if let Err(e) =
+                    analyze_message_history(app.log_file, app.step_duration, app.payload_id)
+                {
+                    tracing::error!("error: {}", e);
+                    std::process::exit(1);
+                }
+                Ok(())
+            }
+        },
     }
-    Ok(())
 }

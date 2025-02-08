@@ -1,7 +1,5 @@
-use std::{ops::Mul, time::Duration};
-
-use netrunner::node::serialize_node_id_as_index;
 use netrunner::node::NodeId;
+use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -28,52 +26,16 @@ impl Payload {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct MessageHistory(Vec<MessageEvent>);
-
-impl MessageHistory {
-    pub fn new() -> Self {
-        Self(Vec::new())
-    }
-
-    pub fn add(
-        &mut self,
-        node_id: NodeId,
-        step_id: usize,
-        step_time: Duration,
-        event_type: MessageEventType,
-    ) {
-        let duration_from_prev = self.0.last().map_or(Duration::ZERO, |prev_event| {
-            step_time.mul((step_id - prev_event.step_id).try_into().unwrap())
-        });
-        self.0.push(MessageEvent {
-            node_id,
-            step_id,
-            duration_from_prev,
-            event_type,
-        });
-    }
-
-    pub fn last_event_type(&self) -> Option<&MessageEventType> {
-        self.0.last().map(|event| &event.event_type)
-    }
-
-    pub fn total_duration(&self) -> Duration {
-        self.0.iter().map(|event| event.duration_from_prev).sum()
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageEvent {
+    pub payload_id: PayloadId,
+    pub step_id: usize,
+    #[serde(with = "node_id_serde")]
+    pub node_id: NodeId,
+    pub event_type: MessageEventType,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct MessageEvent {
-    #[serde(serialize_with = "serialize_node_id_as_index")]
-    node_id: NodeId,
-    step_id: usize,
-    #[serde(serialize_with = "duration_as_millis")]
-    duration_from_prev: Duration,
-    event_type: MessageEventType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageEventType {
     Created,
     PersistentTransmissionScheduled {
@@ -85,20 +47,35 @@ pub enum MessageEventType {
     },
     TemporalProcessorReleased,
     NetworkSent {
-        #[serde(serialize_with = "serialize_node_id_as_index")]
+        #[serde(with = "node_id_serde")]
         to: NodeId,
     },
     NetworkReceived {
-        #[serde(serialize_with = "serialize_node_id_as_index")]
+        #[serde(with = "node_id_serde")]
         from: NodeId,
     },
+    FullyUnwrapped,
 }
 
-pub fn duration_as_millis<S>(duration: &Duration, s: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    s.serialize_u64(duration.as_millis().try_into().unwrap())
+mod node_id_serde {
+    use netrunner::node::{NodeId, NodeIdExt};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(node_id: &NodeId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(node_id.index().try_into().unwrap())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NodeId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(NodeId::from_index(
+            u64::deserialize(deserializer)?.try_into().unwrap(),
+        ))
+    }
 }
 
 #[cfg(test)]

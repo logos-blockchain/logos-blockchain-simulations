@@ -27,3 +27,5 @@ sha2 = "0.10"
 uuid = { version = "1", features = ["fast-rng", "v4"] }
 tracing-appender = "0.2"
 cached = "0.54.0"
+polars = "0.46.0"
+humantime-serde = "1.1.1"
