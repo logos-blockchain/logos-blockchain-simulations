@@ -3,7 +3,7 @@ use nomos_tracing::{
     metrics::otlp::{create_otlp_metrics_layer, OtlpMetricsConfig},
 };
 use std::{path::PathBuf, str::FromStr};
-use tracing::{level_filters::LevelFilter, Level};
+use tracing::{level_filters::LevelFilter, subscriber::DefaultGuard, Level};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -50,7 +50,7 @@ pub fn config_tracing(
     _fmt: LogFormat,
     log_to: &LogOutput,
     with_metrics: bool,
-) -> Option<WorkerGuard> {
+) -> Option<(WorkerGuard, DefaultGuard)> {
     let mut layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
     let (log_layer, guard) = match log_to {
@@ -75,10 +75,10 @@ pub fn config_tracing(
         layers.push(Box::new(metrics_layer));
     }
 
-    tracing_subscriber::registry()
+    let a = tracing_subscriber::registry()
         .with(LevelFilter::from(Level::INFO))
         .with(layers)
-        .init();
+        .set_default();
 
-    Some(guard)
+    Some((guard, a))
 }

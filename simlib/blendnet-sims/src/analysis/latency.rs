@@ -64,6 +64,7 @@ pub fn analyze_latency(log_file: PathBuf, step_duration: Duration) -> Result<(),
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Output {
+    count: usize,
     min: i64,
     min_payload_id: PayloadId,
     q1: f64,
@@ -81,6 +82,7 @@ impl Output {
         let max = series.max::<i64>().unwrap().unwrap();
         let max_payload_id = latency_to_message.get(&max).unwrap().clone();
         Self {
+            count: series.len(),
             min,
             min_payload_id,
             q1: quantile(series, 0.25),

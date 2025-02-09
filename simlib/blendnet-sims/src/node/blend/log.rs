@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[macro_export]
 macro_rules! log {
     ($topic:expr, $msg:expr) => {
-        println!(
+        tracing::info!(
             "{}",
             serde_json::to_string(&$crate::node::blend::log::TopicLog {
                 topic: $topic.to_string(),

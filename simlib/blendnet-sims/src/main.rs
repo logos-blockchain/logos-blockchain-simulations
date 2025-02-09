@@ -10,6 +10,7 @@ use crate::node::blend::{BlendnodeSettings, SimMessage};
 use analysis::history::analyze_message_history;
 use analysis::latency::analyze_latency;
 use anyhow::Ok;
+use batch::batch::BatchApp;
 use clap::{Parser, Subcommand};
 use crossbeam::channel;
 use multiaddr::Multiaddr;
@@ -38,6 +39,7 @@ use crate::settings::SimSettings;
 use netrunner::{runner::SimulationRunner, settings::SimulationSettings};
 
 pub mod analysis;
+pub mod batch;
 mod log;
 mod node;
 mod settings;
@@ -52,6 +54,8 @@ struct Cli {
 enum Commands {
     /// Run the simulation
     Run(SimulationApp),
+    /// Run batch simulations
+    Batch(BatchApp),
     /// Analyze the simulation results
     Analyze {
         #[command(subcommand)]
@@ -356,6 +360,14 @@ fn main() -> anyhow::Result<()> {
             if let Err(e) = app.run() {
                 tracing::error!("error: {}", e);
                 drop(maybe_guard);
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Commands::Batch(app) => {
+            if let Err(e) = app.run() {
+                println!("FUCK: {}", e);
+                tracing::error!("error: {}", e);
                 std::process::exit(1);
             }
             Ok(())
