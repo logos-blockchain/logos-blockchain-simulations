@@ -73,7 +73,9 @@ pub fn analyze_message_history(
                         history.push(event);
                     }
                     MessageEventType::NetworkReceived { from } => {
-                        assert!(!history.is_empty());
+                        if history.is_empty() {
+                            continue;
+                        }
                         assert!(target_node_id.is_some());
                         assert_ne!(target_node_id.unwrap(), from);
                         target_node_id = Some(from);
@@ -81,7 +83,9 @@ pub fn analyze_message_history(
                         history.push(event);
                     }
                     MessageEventType::NetworkSent { .. } => {
-                        assert!(!history.is_empty());
+                        if history.is_empty() {
+                            continue;
+                        }
                         assert!(target_node_id.is_some());
                         if target_event.is_none()
                             || target_event.as_ref().unwrap() != &event.event_type
