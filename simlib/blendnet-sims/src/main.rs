@@ -7,9 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // crates
 use crate::node::blend::state::{BlendnodeRecord, BlendnodeState};
 use crate::node::blend::{BlendnodeSettings, SimMessage};
-use analysis::conn_latency::analyze_connection_latency;
+use analysis::latency::analyze_latency;
 use analysis::message_history::analyze_message_history;
-use analysis::message_latency::analyze_message_latency;
 use anyhow::Ok;
 use clap::{Parser, Subcommand};
 use crossbeam::channel;
@@ -62,12 +61,10 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum AnalyzeCommands {
-    /// Analyze the latency of the messages fully unwrapped
-    MessageLatency(MessageLatencyApp),
+    /// Analyze the latency of the messages and connections
+    Latency(LatencyApp),
     /// Analyze the history of a message
     MessageHistory(MessageHistoryApp),
-    /// Analyze connection latency
-    ConnectionLatency(ConnectionLatencyApp),
 }
 
 /// Main simulation wrapper
@@ -333,7 +330,7 @@ struct ConnLatencyDistributionLog {
 }
 
 #[derive(Parser)]
-struct MessageLatencyApp {
+struct LatencyApp {
     #[clap(long, short)]
     log_file: PathBuf,
     #[clap(long, short, value_parser = humantime::parse_duration)]
@@ -350,14 +347,6 @@ struct MessageHistoryApp {
     payload_id: PayloadId,
 }
 
-#[derive(Parser)]
-struct ConnectionLatencyApp {
-    #[clap(long, short)]
-    log_file: PathBuf,
-    #[clap(long, short, value_parser = humantime::parse_duration)]
-    step_duration: Duration,
-}
-
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -372,8 +361,8 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Commands::Analyze { command } => match command {
-            AnalyzeCommands::MessageLatency(app) => {
-                if let Err(e) = analyze_message_latency(app.log_file, app.step_duration) {
+            AnalyzeCommands::Latency(app) => {
+                if let Err(e) = analyze_latency(app.log_file, app.step_duration) {
                     tracing::error!("error: {}", e);
                     std::process::exit(1);
                 }
@@ -383,13 +372,6 @@ fn main() -> anyhow::Result<()> {
                 if let Err(e) =
                     analyze_message_history(app.log_file, app.step_duration, app.payload_id)
                 {
-                    tracing::error!("error: {}", e);
-                    std::process::exit(1);
-                }
-                Ok(())
-            }
-            AnalyzeCommands::ConnectionLatency(app) => {
-                if let Err(e) = analyze_connection_latency(app.log_file, app.step_duration) {
                     tracing::error!("error: {}", e);
                     std::process::exit(1);
                 }
