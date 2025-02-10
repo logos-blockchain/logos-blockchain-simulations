@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import subprocess
+import sys
 from collections import OrderedDict
 
 import mixlog
@@ -106,21 +107,36 @@ if __name__ == "__main__":
         modified_json = OrderedDict(original_json)  # Preserve original field order
 
         # Apply modifications
-        modified_json["network_settings"]["regions"]["north america west"] = 0.06
-        modified_json["network_settings"]["regions"]["north america east"] = 0.15
-        modified_json["network_settings"]["regions"]["north america central"] = 0.02
-        modified_json["network_settings"]["regions"]["europe"] = 0.47
-        modified_json["network_settings"]["regions"]["northern europe"] = 0.10
-        modified_json["network_settings"]["regions"]["east asia"] = 0.10
-        modified_json["network_settings"]["regions"]["southeast asia"] = 0.07
-        modified_json["network_settings"]["regions"]["australia"] = 0.03
+        if param_set["regions"] == "all":
+            modified_json["network_settings"]["regions"]["north america west"] = 0.06
+            modified_json["network_settings"]["regions"]["north america east"] = 0.15
+            modified_json["network_settings"]["regions"]["north america central"] = 0.02
+            modified_json["network_settings"]["regions"]["europe"] = 0.47
+            modified_json["network_settings"]["regions"]["northern europe"] = 0.10
+            modified_json["network_settings"]["regions"]["east asia"] = 0.10
+            modified_json["network_settings"]["regions"]["southeast asia"] = 0.07
+            modified_json["network_settings"]["regions"]["australia"] = 0.03
+        elif param_set["regions"] == "eu":
+            modified_json["network_settings"]["regions"]["north america west"] = 0.00
+            modified_json["network_settings"]["regions"]["north america east"] = 0.00
+            modified_json["network_settings"]["regions"]["north america central"] = 0.00
+            modified_json["network_settings"]["regions"]["europe"] = 1.00
+            modified_json["network_settings"]["regions"]["northern europe"] = 0.00
+            modified_json["network_settings"]["regions"]["east asia"] = 0.00
+            modified_json["network_settings"]["regions"]["southeast asia"] = 0.00
+            modified_json["network_settings"]["regions"]["australia"] = 0.00
+        else:
+            sys.exit("Invalid region")
+
         modified_json["step_time"] = f"{args.step_duration}ms"
         modified_json["node_count"] = int(param_set["network_size"])
-        modified_json["wards"][0]["sum"] = 1000
+        modified_json["wards"][0]["sum"] = int(param_set["target_message_count"])
         modified_json["connected_peers_count"] = int(param_set["peering_degree"])
         modified_json["data_message_lottery_interval"] = "20s"
         modified_json["stake_proportion"] = 0.0
-        modified_json["persistent_transmission"]["max_emission_frequency"] = 1.0
+        modified_json["persistent_transmission"]["max_emission_frequency"] = float(
+            param_set["max_emission_frequency"]
+        )
         modified_json["persistent_transmission"]["drop_message_probability"] = 0.0
         modified_json["epoch_duration"] = (
             f"{int(param_set['cover_slots_per_epoch']) * int(param_set['cover_slot_duration'])}s"
@@ -145,7 +161,8 @@ if __name__ == "__main__":
         log_path = f"{log_dir}/{idx}.log"
         log_paths.append(log_path)
 
-        if args.skip_run:
+        if args.skip_run or os.path.exists(log_path):
+            print(f"Skipping simulation: {log_path}")
             continue
 
         with open(log_path, "w") as log_file:
@@ -205,33 +222,7 @@ if __name__ == "__main__":
                 [
                     SIM_APP,
                     "analyze",
-                    "message-latency",
-                    "--log-file",
-                    log_path,
-                    "--step-duration",
-                    f"{args.step_duration}ms",
-                ],
-                capture_output=True,
-                text=True,
-            )
-            assert result.returncode == 0
-            latency_analysis = json.loads(result.stdout)
-
-            csv_row.append(latency_analysis["count"])
-            csv_row.append(float(latency_analysis["min"]) / 1000.0)
-            csv_row.append(float(latency_analysis["q1"]) / 1000.0)
-            csv_row.append(float(latency_analysis["avg"]) / 1000.0)
-            csv_row.append(float(latency_analysis["med"]) / 1000.0)
-            csv_row.append(float(latency_analysis["q3"]) / 1000.0)
-            csv_row.append(float(latency_analysis["max"]) / 1000.0)
-            csv_row.append(latency_analysis["min_payload_id"])
-            csv_row.append(latency_analysis["max_payload_id"])
-
-            result = subprocess.run(
-                [
-                    SIM_APP,
-                    "analyze",
-                    "connection-latency",
+                    "latency",
                     "--log-file",
                     log_path,
                     "--step-duration",
@@ -242,13 +233,24 @@ if __name__ == "__main__":
             )
             assert result.returncode == 0
             result = json.loads(result.stdout)
-            csv_row.append(result["count"])
-            csv_row.append(float(result["min"]) / 1000.0)
-            csv_row.append(float(result["q1"]) / 1000.0)
-            csv_row.append(float(result["avg"]) / 1000.0)
-            csv_row.append(float(result["med"]) / 1000.0)
-            csv_row.append(float(result["q3"]) / 1000.0)
-            csv_row.append(float(result["max"]) / 1000.0)
+
+            csv_row.append(result["message"]["count"])
+            csv_row.append(float(result["message"]["min"]) / 1000.0)
+            csv_row.append(float(result["message"]["q1"]) / 1000.0)
+            csv_row.append(float(result["message"]["avg"]) / 1000.0)
+            csv_row.append(float(result["message"]["med"]) / 1000.0)
+            csv_row.append(float(result["message"]["q3"]) / 1000.0)
+            csv_row.append(float(result["message"]["max"]) / 1000.0)
+            csv_row.append(result["message"]["min_payload_id"])
+            csv_row.append(result["message"]["max_payload_id"])
+
+            csv_row.append(result["connection"]["count"])
+            csv_row.append(float(result["connection"]["min"]) / 1000.0)
+            csv_row.append(float(result["connection"]["q1"]) / 1000.0)
+            csv_row.append(float(result["connection"]["avg"]) / 1000.0)
+            csv_row.append(float(result["connection"]["med"]) / 1000.0)
+            csv_row.append(float(result["connection"]["q3"]) / 1000.0)
+            csv_row.append(float(result["connection"]["max"]) / 1000.0)
 
             bandwidth_res = bandwidth_result(log_path, args.step_duration)
             csv_row.append(bandwidth_res["min"] * 8 / 1000.0)
