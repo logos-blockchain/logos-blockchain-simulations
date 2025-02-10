@@ -33,21 +33,21 @@ pub fn analyze_connection_latency(
             let event = topic_log.message;
             match event.event_type {
                 MessageEventType::NetworkSent { to } => {
-                    assert_eq!(
-                        sent_events.insert((event.payload_id, event.node_id, to), event.step_id),
-                        None
-                    );
+                    sent_events
+                        .entry((event.payload_id, event.node_id, to))
+                        .or_insert(event.step_id);
                 }
                 MessageEventType::NetworkReceived { from } => {
-                    let sent_step_id = sent_events
-                        .remove(&(event.payload_id, from, event.node_id))
-                        .unwrap();
-                    let latency = step_duration
-                        .mul((event.step_id - sent_step_id).try_into().unwrap())
-                        .as_millis()
-                        .try_into()
-                        .unwrap();
-                    latencies_ms.push(latency);
+                    if let Some(sent_step_id) =
+                        sent_events.remove(&(event.payload_id, from, event.node_id))
+                    {
+                        let latency = step_duration
+                            .mul((event.step_id - sent_step_id).try_into().unwrap())
+                            .as_millis()
+                            .try_into()
+                            .unwrap();
+                        latencies_ms.push(latency);
+                    }
                 }
                 _ => {
                     continue;
