@@ -11,6 +11,7 @@ use std::{
 
 use netrunner::node::NodeId;
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, DurationMilliSeconds};
 
 use crate::node::blend::{
     log::TopicLog,
@@ -153,6 +154,12 @@ pub fn analyze_message_history(
     }
 
     let mut history_with_durations: Vec<MessageEventWithDuration> = Vec::new();
+    let mut network_latencies = Vec::new();
+    let mut persistent_transmission_latencies = Vec::new();
+    let mut persistent_transmission_indices = Vec::new();
+    let mut temporal_processor_latencies = Vec::new();
+    let mut temporal_processor_indices = Vec::new();
+
     let (_, total_duration) = history.iter().rev().fold(
         (None, Duration::ZERO),
         |(prev_step_id, total_duration): (Option<usize>, Duration), event| {
@@ -162,16 +169,42 @@ pub fn analyze_message_history(
                 }
                 None => Duration::ZERO,
             };
+
             history_with_durations.push(MessageEventWithDuration {
                 event: event.clone(),
                 duration,
             });
+
+            match event.event_type {
+                MessageEventType::PersistentTransmissionScheduled { index } => {
+                    persistent_transmission_indices.push(index);
+                }
+                MessageEventType::PersistentTransmissionReleased => {
+                    persistent_transmission_latencies.push(duration);
+                }
+                MessageEventType::TemporalProcessorScheduled { index } => {
+                    temporal_processor_indices.push(index);
+                }
+                MessageEventType::TemporalProcessorReleased => {
+                    temporal_processor_latencies.push(duration);
+                }
+                MessageEventType::NetworkReceived { .. } => {
+                    network_latencies.push(duration);
+                }
+                _ => {}
+            }
+
             (Some(event.step_id), total_duration.add(duration))
         },
     );
     let output = Output {
         history: history_with_durations,
         total_duration,
+        network_latencies,
+        persistent_transmission_latencies,
+        persistent_transmission_indices,
+        temporal_processor_latencies,
+        temporal_processor_indices,
     };
     println!("{}", serde_json::to_string(&output).unwrap());
     Ok(())
@@ -201,11 +234,20 @@ where
     None
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize)]
 struct Output {
     history: Vec<MessageEventWithDuration>,
-    #[serde(with = "humantime_serde")]
+    #[serde_as(as = "DurationMilliSeconds")]
     total_duration: Duration,
+    #[serde_as(as = "Vec<DurationMilliSeconds>")]
+    network_latencies: Vec<Duration>,
+    #[serde_as(as = "Vec<DurationMilliSeconds>")]
+    persistent_transmission_latencies: Vec<Duration>,
+    persistent_transmission_indices: Vec<usize>,
+    #[serde_as(as = "Vec<DurationMilliSeconds>")]
+    temporal_processor_latencies: Vec<Duration>,
+    temporal_processor_indices: Vec<usize>,
 }
 
 #[derive(Serialize, Deserialize)]
