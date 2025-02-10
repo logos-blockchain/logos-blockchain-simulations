@@ -29,3 +29,4 @@ tracing-appender = "0.2"
 cached = "0.54.0"
 polars = "0.46.0"
 humantime-serde = "1.1.1"
+serde_with = { version = "3.12.0", features = ["hex"] }

@@ -2,8 +2,10 @@ use std::{
     error::Error,
     fs::File,
     io::{BufRead, BufReader},
+    iter::Rev,
     ops::{Add, Mul},
     path::PathBuf,
+    slice::Iter,
     time::Duration,
 };
 
@@ -24,80 +26,130 @@ pub fn analyze_message_history(
     let reader = BufReader::new(file);
 
     let mut history = Vec::new();
-    let mut target_node_id: Option<NodeId> = None;
-    let mut target_event: Option<MessageEventType> = None;
 
     let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
-    for line in lines.iter().rev() {
-        if let Ok(topic_log) = serde_json::from_str::<TopicLog<MessageEvent>>(line) {
-            assert_eq!(topic_log.topic, "MessageEvent");
-            let event = topic_log.message;
-            if event.payload_id == payload_id
-                && (target_node_id.is_none() || target_node_id.unwrap() == event.node_id)
-                && (target_event.is_none() || target_event.as_ref().unwrap() == &event.event_type)
-            {
-                match event.event_type {
-                    MessageEventType::FullyUnwrapped => {
-                        assert!(history.is_empty());
-                        assert!(target_node_id.is_none());
-                        target_node_id = Some(event.node_id);
-                        history.push(event);
-                    }
-                    MessageEventType::Created => {
-                        assert!(!history.is_empty());
-                        assert!(target_node_id.is_some());
-                        history.push(event);
-                    }
-                    MessageEventType::PersistentTransmissionScheduled { .. } => {
-                        assert!(target_node_id.is_some());
-                        assert!(matches!(
-                            history.last().unwrap().event_type,
-                            MessageEventType::PersistentTransmissionReleased { .. }
-                        ));
-                        history.push(event);
-                    }
-                    MessageEventType::PersistentTransmissionReleased => {
-                        assert!(target_node_id.is_some());
-                        history.push(event);
-                    }
-                    MessageEventType::TemporalProcessorScheduled { .. } => {
-                        assert!(target_node_id.is_some());
-                        assert!(matches!(
-                            history.last().unwrap().event_type,
-                            MessageEventType::TemporalProcessorReleased { .. }
-                        ));
-                        history.push(event);
-                    }
-                    MessageEventType::TemporalProcessorReleased => {
-                        assert!(target_node_id.is_some());
-                        history.push(event);
-                    }
-                    MessageEventType::NetworkReceived { from } => {
-                        if history.is_empty() {
-                            continue;
+    let mut rev_iter = lines.iter().rev();
+
+    let event = find_event(
+        &payload_id,
+        None,
+        |event_type| matches!(event_type, MessageEventType::FullyUnwrapped),
+        &mut rev_iter,
+    )
+    .unwrap();
+    history.push(event);
+    loop {
+        let last_event = history.last().unwrap();
+        let event = match &last_event.event_type {
+            MessageEventType::Created => break,
+            MessageEventType::PersistentTransmissionScheduled { .. } => find_event(
+                &payload_id,
+                Some(&last_event.node_id),
+                |event_type| {
+                    matches!(
+                        event_type,
+                        MessageEventType::Created | MessageEventType::TemporalProcessorReleased
+                    )
+                },
+                &mut rev_iter,
+            )
+            .unwrap(),
+            MessageEventType::PersistentTransmissionReleased => find_event(
+                &payload_id,
+                Some(&last_event.node_id),
+                |event_type| {
+                    matches!(
+                        event_type,
+                        MessageEventType::PersistentTransmissionScheduled { .. }
+                    )
+                },
+                &mut rev_iter,
+            )
+            .unwrap(),
+            MessageEventType::TemporalProcessorScheduled { .. } => find_event(
+                &payload_id,
+                Some(&last_event.node_id),
+                |event_type| {
+                    matches!(
+                        event_type,
+                        MessageEventType::NetworkReceived {
+                            duplicate: false,
+                            ..
                         }
-                        assert!(target_node_id.is_some());
-                        assert_ne!(target_node_id.unwrap(), from);
-                        target_node_id = Some(from);
-                        target_event = Some(MessageEventType::NetworkSent { to: event.node_id });
-                        history.push(event);
-                    }
-                    MessageEventType::NetworkSent { .. } => {
-                        if history.is_empty() {
-                            continue;
+                    )
+                },
+                &mut rev_iter,
+            )
+            .unwrap(),
+            MessageEventType::TemporalProcessorReleased => find_event(
+                &payload_id,
+                Some(&last_event.node_id),
+                |event_type| {
+                    matches!(
+                        event_type,
+                        MessageEventType::TemporalProcessorScheduled { .. }
+                    )
+                },
+                &mut rev_iter,
+            )
+            .unwrap(),
+            MessageEventType::NetworkSent {
+                message_hash: target_message_hash,
+                ..
+            } => find_event(
+                &payload_id,
+                Some(&last_event.node_id),
+                |event_type| match event_type {
+                    MessageEventType::NetworkReceived {
+                        message_hash,
+                        duplicate: false,
+                        ..
+                    } => message_hash == target_message_hash,
+                    MessageEventType::PersistentTransmissionReleased => true,
+                    _ => false,
+                },
+                &mut rev_iter,
+            )
+            .unwrap(),
+            MessageEventType::NetworkReceived {
+                from,
+                message_hash: target_message_hash,
+                duplicate: false,
+            } => {
+                let to_node = last_event.node_id;
+                match find_event(
+                    &payload_id,
+                    Some(from),
+                    |event_type: &MessageEventType| match event_type {
+                        MessageEventType::NetworkSent { to, message_hash } => {
+                            to == &to_node && target_message_hash == message_hash
                         }
-                        assert!(target_node_id.is_some());
-                        if target_event.is_none()
-                            || target_event.as_ref().unwrap() != &event.event_type
-                        {
-                            continue;
-                        }
-                        target_event = None;
-                        history.push(event);
+                        _ => false,
+                    },
+                    &mut rev_iter,
+                ) {
+                    Some(ev) => ev,
+                    None => {
+                        panic!(
+                            "No matching NetworkSent event found for NetworkReceived event: {:?}",
+                            last_event
+                        );
                     }
                 }
             }
-        }
+            MessageEventType::FullyUnwrapped => find_event(
+                &payload_id,
+                Some(&last_event.node_id),
+                |event_type| matches!(event_type, MessageEventType::TemporalProcessorReleased),
+                &mut rev_iter,
+            )
+            .unwrap(),
+            event_type => {
+                panic!("Unexpected event type: {:?}", event_type);
+            }
+        };
+
+        history.push(event);
     }
 
     let mut history_with_durations: Vec<MessageEventWithDuration> = Vec::new();
@@ -123,6 +175,30 @@ pub fn analyze_message_history(
     };
     println!("{}", serde_json::to_string(&output).unwrap());
     Ok(())
+}
+
+fn find_event<F>(
+    payload_id: &PayloadId,
+    node_id: Option<&NodeId>,
+    match_event: F,
+    rev_iter: &mut Rev<Iter<'_, String>>,
+) -> Option<MessageEvent>
+where
+    F: Fn(&MessageEventType) -> bool,
+{
+    for line in rev_iter {
+        if let Ok(topic_log) = serde_json::from_str::<TopicLog<MessageEvent>>(line) {
+            assert_eq!(topic_log.topic, "MessageEvent");
+            let event = topic_log.message;
+            if &event.payload_id == payload_id
+                && node_id.map_or(true, |node_id| &event.node_id == node_id)
+                && match_event(&event.event_type)
+            {
+                return Some(event);
+            }
+        }
+    }
+    None
 }
 
 #[derive(Serialize, Deserialize)]

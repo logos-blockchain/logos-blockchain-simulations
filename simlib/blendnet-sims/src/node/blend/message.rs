@@ -1,7 +1,10 @@
 use netrunner::node::NodeId;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_with::{hex::Hex, serde_as};
 use uuid::Uuid;
+
+use super::Sha256Hash;
 
 pub type PayloadId = String;
 
@@ -35,6 +38,7 @@ pub struct MessageEvent {
     pub event_type: MessageEventType,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MessageEventType {
     Created,
@@ -49,10 +53,15 @@ pub enum MessageEventType {
     NetworkSent {
         #[serde(with = "node_id_serde")]
         to: NodeId,
+        #[serde_as(as = "Hex")]
+        message_hash: Sha256Hash,
     },
     NetworkReceived {
         #[serde(with = "node_id_serde")]
         from: NodeId,
+        #[serde_as(as = "Hex")]
+        message_hash: Sha256Hash,
+        duplicate: bool,
     },
     FullyUnwrapped,
 }

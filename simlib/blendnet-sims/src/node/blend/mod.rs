@@ -73,7 +73,7 @@ pub struct BlendnodeSettings {
     >,
 }
 
-type Sha256Hash = [u8; 32];
+pub type Sha256Hash = [u8; 32];
 
 /// This node implementation only used for testing different streaming implementation purposes.
 pub struct BlendNode {
@@ -207,6 +207,9 @@ impl BlendNode {
     }
 
     fn forward(&mut self, message: SimMessage, exclude_node: Option<NodeId>) {
+        let message_hash = Self::sha256(&message.0);
+        self.message_cache.cache_set(message_hash, ());
+
         let payload_id = Self::parse_payload(&message.0).id();
         for node_id in self
             .settings
@@ -220,35 +223,39 @@ impl BlendNode {
                     payload_id: payload_id.clone(),
                     step_id: self.state.step_id,
                     node_id: self.id,
-                    event_type: MessageEventType::NetworkSent { to: *node_id }
+                    event_type: MessageEventType::NetworkSent {
+                        to: *node_id,
+                        message_hash
+                    }
                 }
             );
             self.network_interface
                 .send_message(*node_id, message.clone())
         }
-        self.message_cache.cache_set(Self::sha256(&message.0), ());
     }
 
     fn receive(&mut self) -> Vec<NetworkMessage<SimMessage>> {
         self.network_interface
             .receive_messages()
             .into_iter()
-            .inspect(|msg| {
+            // Retain only messages that have not been seen before
+            .filter(|msg| {
+                let message_hash = Self::sha256(&msg.payload().0);
+                let duplicate = self.message_cache.cache_set(message_hash, ()).is_some();
                 log!(
                     "MessageEvent",
                     MessageEvent {
                         payload_id: Self::parse_payload(&msg.payload().0).id(),
                         step_id: self.state.step_id,
                         node_id: self.id,
-                        event_type: MessageEventType::NetworkReceived { from: msg.from }
+                        event_type: MessageEventType::NetworkReceived {
+                            from: msg.from,
+                            message_hash,
+                            duplicate,
+                        }
                     }
                 );
-            })
-            // Retain only messages that have not been seen before
-            .filter(|msg| {
-                self.message_cache
-                    .cache_set(Self::sha256(&msg.payload().0), ())
-                    .is_none()
+                !duplicate
             })
             .collect()
     }

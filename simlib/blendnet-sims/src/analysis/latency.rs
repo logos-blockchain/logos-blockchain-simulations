@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::node::blend::log::TopicLog;
 use crate::node::blend::message::{MessageEvent, MessageEventType, PayloadId};
+use crate::node::blend::Sha256Hash;
 
 pub fn analyze_latency(log_file: PathBuf, step_duration: Duration) -> Result<(), Box<dyn Error>> {
     let output = Output {
@@ -118,7 +119,7 @@ fn analyze_connection_latency(
     let file = File::open(log_file)?;
     let reader = BufReader::new(file);
 
-    let mut sent_events: HashMap<(PayloadId, NodeId, NodeId), usize> = HashMap::new();
+    let mut sent_events: HashMap<(Sha256Hash, NodeId, NodeId), usize> = HashMap::new();
     let mut latencies_ms: Vec<i64> = Vec::new();
 
     for line in reader.lines() {
@@ -127,14 +128,18 @@ fn analyze_connection_latency(
             assert_eq!(topic_log.topic, "MessageEvent");
             let event = topic_log.message;
             match event.event_type {
-                MessageEventType::NetworkSent { to } => {
+                MessageEventType::NetworkSent { to, message_hash } => {
                     sent_events
-                        .entry((event.payload_id, event.node_id, to))
+                        .entry((message_hash, event.node_id, to))
                         .or_insert(event.step_id);
                 }
-                MessageEventType::NetworkReceived { from } => {
+                MessageEventType::NetworkReceived {
+                    from,
+                    message_hash,
+                    duplicate: false,
+                } => {
                     if let Some(sent_step_id) =
-                        sent_events.remove(&(event.payload_id, from, event.node_id))
+                        sent_events.remove(&(message_hash, from, event.node_id))
                     {
                         let latency = step_duration
                             .mul((event.step_id - sent_step_id).try_into().unwrap())
